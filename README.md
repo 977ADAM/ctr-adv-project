@@ -28,10 +28,12 @@
 - `src/model.py` — dataset/model/early stopping
 - `src/trainer.py` — training loop и checkpointing
 - `src/inference.py` — сервис инференса по сохраненным артефактам
+- `src/api.py` — FastAPI mini-service (`/health`, `/predict`, `/model-info`)
 - `src/config.py` — конфигурация
 - `tests/` — unit-тесты
 - `data/` — входные CSV
 - `artifacts/` — результаты запусков
+- `Dockerfile`, `docker-compose.yml` — контейнерный запуск демо
 
 ## Установка
 
@@ -40,6 +42,7 @@ python -m venv venv
 source venv/bin/activate
 pip install -e .
 pip install -e .[dev]
+pip install -e .[api]
 ```
 
 ## Формат данных
@@ -101,6 +104,64 @@ ruff check .
 mypy
 ```
 
+## Mini API (FastAPI)
+
+Локальный запуск:
+
+```bash
+uvicorn src.api:app --host 0.0.0.0 --port 8000
+```
+
+По умолчанию сервис ищет последний валидный run в `artifacts/click_model/*`.
+Можно явно указать путь к артефактам:
+
+```bash
+export MODEL_ARTIFACTS_DIR=./artifacts/click_model/<run_name>
+uvicorn src.api:app --host 0.0.0.0 --port 8000
+```
+
+Эндпоинты:
+
+- `GET /health` — статус сервиса и путь к артефактам
+- `GET /model-info` — информация о признаках/кардинальностях из `meta.json`
+- `POST /predict` — инференс по батчу строк
+
+Пример `POST /predict`:
+
+```bash
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rows": [
+      {
+        "DateTime": "2017-07-08 00:00",
+        "user_id": 732573,
+        "product": "J",
+        "campaign_id": 404347,
+        "webpage_id": 53587,
+        "product_category_1": 1,
+        "product_category_2": null,
+        "user_group_id": 5,
+        "gender": "Male",
+        "age_level": 5,
+        "user_depth": 3,
+        "city_development_index": null,
+        "var_1": 0
+      }
+    ]
+  }'
+```
+
+## Docker Compose Demo
+
+Запуск “из коробки”:
+
+```bash
+docker compose up --build
+```
+
+Сервис будет доступен на `http://localhost:8000`.
+
 ## Тесты
 
 Покрыты базовые сценарии:
@@ -109,5 +170,5 @@ mypy
 - `fit/transform/save/load` для `CTRPreprocessor`;
 - валидация схемы и split без leakage (time + user_id);
 - базовые проверки `ClickDataset`, `ClickModel`, `EarlyStopping`;
-- `CTRInferenceService` для пустого input;
+- `CTRInferenceService` для пустого/непустого input и CSV-выгрузки;
 - `Trainer` для `resume_from` checkpoint.
