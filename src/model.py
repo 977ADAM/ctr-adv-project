@@ -6,7 +6,12 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    log_loss,
+    roc_auc_score,
+)
 
 
 # ================= DATASET =================
@@ -144,6 +149,54 @@ def evaluate(model, loader, criterion, device):
 
     all_probs = np.concatenate(all_probs)
     all_targets = np.concatenate(all_targets)
-    auc = roc_auc_score(all_targets, all_probs)
+    val_loss = total_loss / max(1, len(loader))
 
-    return total_loss / max(1, len(loader)), float(auc)
+    try:
+        auc = float(roc_auc_score(all_targets, all_probs))
+    except ValueError:
+        auc = float("nan")
+
+    try:
+        pr_auc = float(average_precision_score(all_targets, all_probs))
+    except ValueError:
+        pr_auc = float("nan")
+
+    val_logloss = float(log_loss(all_targets, all_probs, labels=[0, 1]))
+    brier = float(brier_score_loss(all_targets, all_probs))
+    ece = _expected_calibration_error(all_targets, all_probs, n_bins=10)
+
+    return {
+        "val_loss": float(val_loss),
+        "val_auc": auc,
+        "val_pr_auc": pr_auc,
+        "val_logloss": val_logloss,
+        "val_brier": brier,
+        "val_ece": float(ece),
+    }
+
+
+def _expected_calibration_error(
+    targets: np.ndarray,
+    probs: np.ndarray,
+    n_bins: int = 10,
+) -> float:
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    ece = 0.0
+    n = len(probs)
+
+    for i in range(n_bins):
+        left = edges[i]
+        right = edges[i + 1]
+        if i == n_bins - 1:
+            mask = (probs >= left) & (probs <= right)
+        else:
+            mask = (probs >= left) & (probs < right)
+        if not np.any(mask):
+            continue
+        bin_probs = probs[mask]
+        bin_targets = targets[mask]
+        conf = float(np.mean(bin_probs))
+        acc = float(np.mean(bin_targets))
+        ece += (len(bin_probs) / n) * abs(acc - conf)
+
+    return float(ece)

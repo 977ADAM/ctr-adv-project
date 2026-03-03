@@ -71,3 +71,9 @@ def test_trainer_resume_from_checkpoint(tmp_path) -> None:
 
     assert len(history) == 1
     assert isinstance(best_auc, float)
+    row = history[0]
+    assert "val_auc" in row
+    assert "val_pr_auc" in row
+    assert "val_logloss" in row
+    assert "val_brier" in row
+    assert "val_ece" in row

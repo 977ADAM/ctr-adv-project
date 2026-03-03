@@ -1,5 +1,6 @@
 import torch
 from pathlib import Path
+import numpy as np
 
 from .model import evaluate
 
@@ -47,35 +48,36 @@ class Trainer:
 
         for epoch in range(self.start_epoch, self.config.epochs + 1):
             tr_loss = self._train_epoch(train_loader)
-            va_loss, va_auc = evaluate(
+            metrics = evaluate(
                 self.model,
                 val_loader,
                 self.criterion,
                 self.device,
             )
+            va_auc = float(metrics["val_auc"])
+            monitor_auc = va_auc if np.isfinite(va_auc) else 0.0
 
-            self.scheduler.step(va_auc)
+            self.scheduler.step(monitor_auc)
             current_lr = self.optimizer.param_groups[0]["lr"]
 
             row = {
                 "epoch": epoch,
                 "train_loss": tr_loss,
-                "val_loss": va_loss,
-                "val_auc": va_auc,
+                **metrics,
                 "lr": current_lr,
             }
 
             history.append(row)
             self.logger.info("epoch_metrics", extra={"event": row})
 
-            if va_auc > best_auc:
-                best_auc = va_auc
+            if monitor_auc > best_auc:
+                best_auc = monitor_auc
                 self._save_checkpoint("best.pt", epoch, best_auc)
 
             if self.config.save_last_checkpoint:
                 self._save_checkpoint("last.pt", epoch, best_auc)
 
-            if self.stopper.step(va_auc):
+            if self.stopper.step(monitor_auc):
                 break
 
         return best_auc, history
