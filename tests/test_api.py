@@ -5,6 +5,7 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from src import api
 
@@ -64,6 +65,20 @@ def _endpoint(app, path: str) -> Callable[..., Any]:
     raise AssertionError(f"Endpoint not found: {path}")
 
 
+def _fake_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "method": "POST",
+            "path": "/predict",
+            "headers": [],
+            "query_string": b"",
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+
 def _app_with_stub() -> tuple[Any, StubService]:
     app = api.create_app()
     stub = StubService()
@@ -73,6 +88,11 @@ def _app_with_stub() -> tuple[Any, StubService]:
     app.state.predict_request_model = api._build_predict_request_model()
     app.state.predict_row_model = row_model
     app.state.required_predict_fields = api._build_required_predict_fields(stub.meta)
+    app.state.api_key = None
+    app.state.max_batch_size = 100
+    app.state.rate_limit_rpm = 120
+    app.state.rate_limit_window_sec = 60.0
+    app.state.rate_limit_hits.clear()
     return app, stub
 
 
@@ -83,7 +103,7 @@ def test_predict_returns_422_when_datetime_invalid() -> None:
 
     predict = _endpoint(app, "/predict")
     with pytest.raises(HTTPException) as exc:
-        predict({"rows": [row]})
+        predict({"rows": [row]}, request=_fake_request())
 
     assert exc.value.status_code == 422
 
@@ -95,7 +115,7 @@ def test_predict_returns_422_when_required_field_missing_from_meta() -> None:
 
     predict = _endpoint(app, "/predict")
     with pytest.raises(HTTPException) as exc:
-        predict({"rows": [row]})
+        predict({"rows": [row]}, request=_fake_request())
 
     assert exc.value.status_code == 422
 
@@ -107,7 +127,7 @@ def test_predict_accepts_null_in_non_datetime_core_fields() -> None:
     row["product_category_2"] = None
 
     predict = _endpoint(app, "/predict")
-    resp = predict({"rows": [row]})
+    resp = predict({"rows": [row]}, request=_fake_request())
 
     assert resp.probabilities == [0.41999998688697815]
     assert stub.last_df is not None
@@ -119,7 +139,7 @@ def test_predict_allows_extra_fields() -> None:
     row["custom_feature_x"] = "value"
 
     predict = _endpoint(app, "/predict")
-    predict({"rows": [row]})
+    predict({"rows": [row]}, request=_fake_request())
 
     assert stub.last_df is not None
     assert "custom_feature_x" in stub.last_df.columns
@@ -133,7 +153,7 @@ def test_predict_fails_whole_request_on_one_invalid_row() -> None:
 
     predict = _endpoint(app, "/predict")
     with pytest.raises(HTTPException) as exc:
-        predict({"rows": [good, bad]})
+        predict({"rows": [good, bad]}, request=_fake_request())
 
     assert exc.value.status_code == 422
 
@@ -149,7 +169,7 @@ def test_predict_returns_503_when_model_not_loaded() -> None:
     health = _endpoint(app, "/health")
 
     with pytest.raises(HTTPException) as exc:
-        predict({"rows": [_valid_row()]})
+        predict({"rows": [_valid_row()]}, request=_fake_request())
 
     assert exc.value.status_code == 503
     assert "Model is not loaded" in str(exc.value.detail)
@@ -169,3 +189,52 @@ def test_model_info_exposes_required_predict_fields() -> None:
     assert "DateTime" in resp["required_predict_fields"]
     assert "hour" not in resp["required_predict_fields"]
     assert "dayofweek" not in resp["required_predict_fields"]
+
+
+def test_live_and_ready_endpoints() -> None:
+    app, _ = _app_with_stub()
+
+    live = _endpoint(app, "/live")
+    ready = _endpoint(app, "/ready")
+
+    assert live()["status"] == "alive"
+    assert ready()["status"] == "ready"
+
+
+def test_ready_returns_503_when_model_or_schema_missing() -> None:
+    app = api.create_app()
+    app.state.service = None
+    app.state.predict_request_model = None
+    app.state.startup_error = "not loaded"
+
+    ready = _endpoint(app, "/ready")
+    with pytest.raises(HTTPException) as exc:
+        ready()
+    assert exc.value.status_code == 503
+
+
+def test_predict_enforces_max_batch_size() -> None:
+    app, _ = _app_with_stub()
+    app.state.max_batch_size = 1
+    predict = _endpoint(app, "/predict")
+
+    with pytest.raises(HTTPException) as exc:
+        predict({"rows": [_valid_row(), _valid_row()]}, request=_fake_request())
+    assert exc.value.status_code == 413
+
+
+def test_predict_requires_api_key_when_configured() -> None:
+    app, _ = _app_with_stub()
+    app.state.api_key = "secret"
+    predict = _endpoint(app, "/predict")
+
+    with pytest.raises(HTTPException) as exc:
+        predict({"rows": [_valid_row()]}, request=_fake_request(), x_api_key=None)
+    assert exc.value.status_code == 401
+
+    resp = predict(
+        {"rows": [_valid_row()]},
+        request=_fake_request(),
+        x_api_key="secret",
+    )
+    assert len(resp.probabilities) == 1

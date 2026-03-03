@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
+import time
+import uuid
+import logging
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator
 
@@ -19,6 +23,7 @@ REQUIRED_ARTIFACT_FILES = (
     "cat_encoder.joblib",
     "preprocessing_meta.json",
 )
+logger = logging.getLogger("ctr_api")
 
 
 class PredictResponse(BaseModel):
@@ -98,7 +103,18 @@ def _rows_to_dataframe(rows: list[BaseModel]) -> pd.DataFrame:
 
 
 def _web_ui_path() -> Path:
-    return Path(__file__).resolve().parent / "web" / "index.html"
+    return Path(__file__).resolve().parent / "web" / "dist" / "index.html"
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(1, value)
 
 
 def resolve_artifacts_dir() -> Path:
@@ -138,6 +154,11 @@ def create_app() -> FastAPI:
         app.state.predict_row_model = None
         app.state.required_predict_fields = []
         app.state.startup_error = None
+        app.state.api_key = os.getenv("API_KEY")
+        app.state.max_batch_size = _env_int("MAX_BATCH_SIZE", 100)
+        app.state.rate_limit_rpm = _env_int("RATE_LIMIT_RPM", 120)
+        app.state.rate_limit_window_sec = 60.0
+        app.state.rate_limit_hits = defaultdict(deque)
         try:
             artifacts_dir = resolve_artifacts_dir()
             service = CTRInferenceService(artifacts_dir=artifacts_dir)
@@ -160,6 +181,11 @@ def create_app() -> FastAPI:
     app.state.predict_row_model = None
     app.state.required_predict_fields = []
     app.state.startup_error = None
+    app.state.api_key = os.getenv("API_KEY")
+    app.state.max_batch_size = _env_int("MAX_BATCH_SIZE", 100)
+    app.state.rate_limit_rpm = _env_int("RATE_LIMIT_RPM", 120)
+    app.state.rate_limit_window_sec = 60.0
+    app.state.rate_limit_hits = defaultdict(deque)
 
     def _get_service_or_503() -> CTRInferenceService:
         service = app.state.service
@@ -197,6 +223,49 @@ def create_app() -> FastAPI:
             )
         return model
 
+    def _enforce_api_key_or_401(api_key: str | None) -> None:
+        expected = app.state.api_key
+        if not expected:
+            return
+        if api_key != expected:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+    def _enforce_rate_limit_or_429(client_id: str) -> None:
+        hits = app.state.rate_limit_hits[client_id]
+        now = time.monotonic()
+        window = float(app.state.rate_limit_window_sec)
+        limit = int(app.state.rate_limit_rpm)
+
+        while hits and now - hits[0] > window:
+            hits.popleft()
+        if len(hits) >= limit:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+        hits.append(now)
+
+    @app.get("/live")
+    def live() -> dict[str, str]:
+        return {"status": "alive"}
+
+    @app.get("/ready")
+    def ready() -> dict[str, Any]:
+        model_ready = app.state.service is not None
+        schema_ready = app.state.predict_request_model is not None
+        if not (model_ready and schema_ready):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": "not_ready",
+                    "model_loaded": model_ready,
+                    "schema_loaded": schema_ready,
+                    "startup_error": app.state.startup_error,
+                },
+            )
+        return {
+            "status": "ready",
+            "model_loaded": True,
+            "schema_loaded": True,
+        }
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         service = app.state.service
@@ -218,10 +287,19 @@ def create_app() -> FastAPI:
         row_model = _get_predict_row_model_or_503()
 
         validated_payload = request_model.model_validate(payload)
+        payload_rows = cast(Any, validated_payload).rows
+        if len(payload_rows) > int(app.state.max_batch_size):
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Batch size {len(payload_rows)} exceeds max_batch_size "
+                    f"{app.state.max_batch_size}"
+                ),
+            )
+
         validated_rows: list[BaseModel] = []
         row_errors: list[dict[str, Any]] = []
 
-        payload_rows = cast(Any, validated_payload).rows
         for idx, row in enumerate(payload_rows):
             try:
                 validated_rows.append(row_model.model_validate(row))
@@ -250,7 +328,10 @@ def create_app() -> FastAPI:
         return FileResponse(ui)
 
     @app.get("/model-info")
-    def model_info() -> dict[str, Any]:
+    def model_info(
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    ) -> dict[str, Any]:
+        _enforce_api_key_or_401(x_api_key)
         service = _get_service_or_503()
         meta = service.meta or {}
         return {
@@ -264,10 +345,35 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/predict", response_model=PredictResponse)
-    def predict(payload: dict[str, Any]) -> PredictResponse:
+    def predict(
+        payload: dict[str, Any],
+        request: Request,
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    ) -> PredictResponse:
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        started = time.perf_counter()
+        _enforce_api_key_or_401(x_api_key)
+        client_host = request.client.host if request.client is not None else "unknown"
+        _enforce_rate_limit_or_429(f"http:{client_host}")
         try:
-            return _validate_and_predict(payload)
+            result = _validate_and_predict(payload)
+            latency_ms = (time.perf_counter() - started) * 1000
+            logger.info(
+                "predict_ok request_id=%s client=%s latency_ms=%.2f batch_size=%d",
+                request_id,
+                client_host,
+                latency_ms,
+                len(payload.get("rows", [])) if isinstance(payload, dict) else 0,
+            )
+            return result
         except HTTPException:
+            latency_ms = (time.perf_counter() - started) * 1000
+            logger.info(
+                "predict_error request_id=%s client=%s latency_ms=%.2f",
+                request_id,
+                client_host,
+                latency_ms,
+            )
             raise
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=exc.errors()) from exc
@@ -278,6 +384,14 @@ def create_app() -> FastAPI:
 
     @app.websocket("/ws")
     async def websocket_handler(websocket: WebSocket) -> None:
+        client_host = websocket.client.host if websocket.client else "unknown"
+        request_id_prefix = str(uuid.uuid4())[:8]
+        try:
+            _enforce_api_key_or_401(websocket.query_params.get("api_key"))
+        except HTTPException:
+            await websocket.close(code=1008)
+            return
+
         await websocket.accept()
         try:
             while True:
@@ -318,17 +432,40 @@ def create_app() -> FastAPI:
                         )
                         continue
                     try:
+                        started = time.perf_counter()
+                        request_id = (
+                            message.get("request_id")
+                            or f"{request_id_prefix}-{uuid.uuid4().hex[:8]}"
+                        )
+                        _enforce_rate_limit_or_429(f"ws:{client_host}")
                         result = _validate_and_predict(payload)
+                        latency_ms = (time.perf_counter() - started) * 1000
+                        logger.info(
+                            "ws_predict_ok request_id=%s client=%s latency_ms=%.2f",
+                            request_id,
+                            client_host,
+                            latency_ms,
+                        )
                         await websocket.send_json(
                             {
                                 "type": "predict_result",
+                                "request_id": request_id,
                                 "data": result.model_dump(),
                             }
                         )
                     except HTTPException as exc:
+                        latency_ms = (time.perf_counter() - started) * 1000
+                        logger.info(
+                            "ws_predict_error request_id=%s client=%s latency_ms=%.2f status=%d",
+                            request_id,
+                            client_host,
+                            latency_ms,
+                            exc.status_code,
+                        )
                         await websocket.send_json(
                             {
                                 "type": "error",
+                                "request_id": request_id,
                                 "status": exc.status_code,
                                 "detail": exc.detail,
                             }
@@ -337,6 +474,7 @@ def create_app() -> FastAPI:
                         await websocket.send_json(
                             {
                                 "type": "error",
+                                "request_id": request_id,
                                 "status": 422,
                                 "detail": exc.errors(),
                             }
@@ -345,6 +483,7 @@ def create_app() -> FastAPI:
                         await websocket.send_json(
                             {
                                 "type": "error",
+                                "request_id": request_id,
                                 "status": 500,
                                 "detail": str(exc),
                             }

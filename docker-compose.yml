@@ -5,4 +5,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    environment:
+      - API_KEY=${API_KEY:-}
+      - MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-100}
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-120}
     restart: unless-stopped

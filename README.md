@@ -126,6 +126,8 @@ uvicorn src.api:app --host 0.0.0.0 --port 8080
 - `GET /model-info` — информация о признаках/кардинальностях из `meta.json`
 - `POST /predict` — инференс по батчу строк с ранней валидацией схемы
 - `WS /ws` — WebSocket API для `health`, `model_info`, `predict`
+- `GET /live` — liveness probe
+- `GET /ready` — readiness probe (модель + схема загружены)
 
 Схема `POST /predict` строится динамически при старте из артефактов (`meta.json`):
 
@@ -143,6 +145,28 @@ Web UI:
 
 - `GET /` — React интерфейс, который работает через WebSocket (`/ws`)
 - в UI можно отправлять payload для предсказаний и смотреть ответы сервера
+
+Прод-параметры API через env:
+
+- `API_KEY` — если задан, обязателен в `X-API-Key` (HTTP) и `?api_key=` (WS)
+- `MAX_BATCH_SIZE` — лимит числа строк в одном `predict` (default: `100`)
+- `RATE_LIMIT_RPM` — лимит запросов `predict` в минуту на клиента (default: `120`)
+
+Логи `predict` содержат `request_id` и `latency_ms`.
+
+## Frontend (Vite)
+
+UI переведен на production-сборку (без runtime Babel/CDN React):
+
+```bash
+cd web-ui
+npm install
+npm run build
+```
+
+Сборка кладется в `src/web/dist`, после чего API отдает UI на `GET /`.
+Кнопка `Fill required fields` в UI подставляет поля автоматически из
+`/model-info.required_predict_fields`.
 
 Пример `POST /predict`:
 
