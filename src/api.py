@@ -31,6 +31,43 @@ class PredictResponse(BaseModel):
     probabilities: list[float]
 
 
+class PredictRowIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    DateTime: str
+    user_id: int | None = None
+    gender: str | None = None
+    product: str | None = None
+    campaign_id: int | None = None
+    webpage_id: int | None = None
+    user_group_id: float | int | None = None
+    product_category_1: float | int | None = None
+    product_category_2: float | int | None = None
+    age_level: float | int | None = None
+    user_depth: float | int | None = None
+    city_development_index: float | int | None = None
+    var_1: float | int | None = None
+
+    @field_validator("DateTime")
+    @classmethod
+    def validate_datetime(cls, value: str) -> str:
+        if value is None or value.strip() == "":
+            raise ValueError("DateTime must be a valid datetime string")
+        try:
+            pd.to_datetime(value, errors="raise")
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("DateTime must be a valid datetime string") from exc
+        return value
+
+
+class PredictRequest(BaseModel):
+    rows: list[PredictRowIn] = Field(
+        ...,
+        description="Rows for CTR prediction",
+        min_length=1,
+    )
+
+
 class _DynamicPredictRowBase(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -88,17 +125,6 @@ def _build_predict_row_model(meta: dict[str, Any]) -> type[BaseModel]:
         ),
     )
 
-
-def _build_predict_request_model() -> type[BaseModel]:
-    return cast(
-        type[BaseModel],
-        create_model(
-        "PredictRequestDynamic",
-        rows=(list[dict[str, Any]], Field(..., min_length=1)),
-        ),
-    )
-
-
 def _rows_to_dataframe(rows: list[BaseModel]) -> pd.DataFrame:
     return pd.DataFrame([row.model_dump() for row in rows])
 
@@ -151,7 +177,6 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         app.state.artifacts_dir = None
         app.state.service = None
-        app.state.predict_request_model = None
         app.state.predict_row_model = None
         app.state.required_predict_fields = []
         app.state.startup_error = None
@@ -164,7 +189,6 @@ def create_app() -> FastAPI:
             artifacts_dir = resolve_artifacts_dir()
             service = CTRInferenceService(artifacts_dir=artifacts_dir)
             predict_row_model = _build_predict_row_model(service.meta or {})
-            app.state.predict_request_model = _build_predict_request_model()
             app.state.predict_row_model = predict_row_model
             app.state.required_predict_fields = _build_required_predict_fields(
                 service.meta or {}
@@ -178,7 +202,6 @@ def create_app() -> FastAPI:
     app = FastAPI(title="CTR Demo API", version="1.0.0", lifespan=lifespan)
     app.state.artifacts_dir = None
     app.state.service = None
-    app.state.predict_request_model = None
     app.state.predict_row_model = None
     app.state.required_predict_fields = []
     app.state.startup_error = None
@@ -205,18 +228,6 @@ def create_app() -> FastAPI:
                 ),
             )
         return service
-
-    def _get_predict_request_model_or_503() -> type[BaseModel]:
-        model = app.state.predict_request_model
-        if model is None:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Predict schema is not loaded. "
-                    f"Startup error: {app.state.startup_error}"
-                ),
-            )
-        return model
 
     def _get_predict_row_model_or_503() -> type[BaseModel]:
         model = app.state.predict_row_model
@@ -256,7 +267,7 @@ def create_app() -> FastAPI:
     @app.get("/ready")
     def ready() -> dict[str, Any]:
         model_ready = app.state.service is not None
-        schema_ready = app.state.predict_request_model is not None
+        schema_ready = app.state.predict_row_model is not None
         if not (model_ready and schema_ready):
             raise HTTPException(
                 status_code=503,
@@ -284,17 +295,15 @@ def create_app() -> FastAPI:
                 else None
             ),
             "model_loaded": service is not None and service.model is not None,
-            "schema_loaded": app.state.predict_request_model is not None,
+            "schema_loaded": app.state.predict_row_model is not None,
             "startup_error": app.state.startup_error,
         }
 
-    def _validate_and_predict(payload: dict[str, Any]) -> PredictResponse:
+    def _validate_and_predict(payload: PredictRequest) -> PredictResponse:
         service = _get_service_or_503()
-        request_model = _get_predict_request_model_or_503()
         row_model = _get_predict_row_model_or_503()
 
-        validated_payload = request_model.model_validate(payload)
-        payload_rows = cast(Any, validated_payload).rows
+        payload_rows = payload.rows
         if len(payload_rows) > int(app.state.max_batch_size):
             raise HTTPException(
                 status_code=413,
@@ -309,7 +318,9 @@ def create_app() -> FastAPI:
 
         for idx, row in enumerate(payload_rows):
             try:
-                validated_rows.append(row_model.model_validate(row))
+                validated_rows.append(
+                    row_model.model_validate(row.model_dump(exclude_unset=True))
+                )
             except ValidationError as exc:
                 for err in exc.errors():
                     loc = tuple(err.get("loc", ()))
@@ -353,7 +364,7 @@ def create_app() -> FastAPI:
 
     @app.post("/predict", response_model=PredictResponse)
     def predict(
-        payload: dict[str, Any],
+        payload: PredictRequest,
         request: Request,
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     ) -> PredictResponse:
@@ -370,7 +381,7 @@ def create_app() -> FastAPI:
                 request_id,
                 client_host,
                 latency_ms,
-                len(payload.get("rows", [])) if isinstance(payload, dict) else 0,
+                len(payload.rows),
             )
             return result
         except HTTPException:
@@ -445,7 +456,9 @@ def create_app() -> FastAPI:
                             or f"{request_id_prefix}-{uuid.uuid4().hex[:8]}"
                         )
                         _enforce_rate_limit_or_429(f"ws:{client_host}")
-                        result = _validate_and_predict(payload)
+                        result = _validate_and_predict(
+                            PredictRequest.model_validate(payload)
+                        )
                         latency_ms = (time.perf_counter() - started) * 1000
                         logger.info(
                             "ws_predict_ok request_id=%s client=%s latency_ms=%.2f",

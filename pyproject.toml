@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools==75.6.0", "wheel==0.45.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,22 +9,23 @@ description = "CTR prediction training and inference pipeline"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "numpy",
-  "pandas",
-  "scikit-learn",
-  "torch",
-  "joblib",
+  "numpy==2.2.2",
+  "pandas==2.2.3",
+  "scikit-learn==1.6.1",
+  "torch==2.5.1",
+  "joblib==1.4.2",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest",
-  "ruff",
-  "mypy",
+  "pytest==8.3.4",
+  "ruff==0.9.2",
+  "mypy==1.14.1",
 ]
 api = [
-  "fastapi",
-  "uvicorn[standard]",
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.34.0",
+  "pydantic==2.10.5",
 ]
 
 [tool.setuptools]
