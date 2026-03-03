@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 
-from config import Config
+from .config import Config
 
 
 class CLIParser:

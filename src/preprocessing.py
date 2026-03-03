@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Tuple, List
+from typing import List
 
 import numpy as np
 import pandas as pd
@@ -122,6 +122,9 @@ class CTRPreprocessor:
         meta = {
             "categorical_cols": self.categorical_cols,
             "numerical_cols": self.numerical_cols,
+            "medians": (
+                self.medians.to_dict() if self.medians is not None else None
+            ),
         }
         (path / "preprocessing_meta.json").write_text(
             json.dumps(meta, indent=2)
@@ -136,3 +139,7 @@ class CTRPreprocessor:
         )
         self.categorical_cols = meta["categorical_cols"]
         self.numerical_cols = meta["numerical_cols"]
+        medians = meta.get("medians")
+        self.medians = (
+            pd.Series(medians, dtype=float) if medians is not None else None
+        )

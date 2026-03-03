@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 import torch
 
-from preprocessing import CTRPreprocessor
-from model import ClickModel, ClickDataset, make_loader
-from config import Config
+from .preprocessing import CTRPreprocessor
+from .model import ClickModel, ClickDataset, make_loader
+from .config import Config
 
 
 class CTRInferenceService:
@@ -92,6 +92,8 @@ class CTRInferenceService:
             X_num_b = X_num_b.to(self.device)
             X_cat_b = X_cat_b.to(self.device)
 
+            if self.model is None:
+                raise RuntimeError("Model is not loaded.")
             logits = self.model((X_num_b, X_cat_b))
             p = torch.sigmoid(logits).cpu().numpy().reshape(-1)
             probs.append(p)

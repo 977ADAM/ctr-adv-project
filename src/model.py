@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 import torch
 from torch import nn
@@ -97,7 +97,7 @@ class EarlyStopping:
     def __init__(self, patience: int, mode: str = "max"):
         self.patience = patience
         self.mode = mode
-        self.best = None
+        self.best: Optional[float] = None
         self.bad_epochs = 0
 
     def step(self, value: float) -> bool:
