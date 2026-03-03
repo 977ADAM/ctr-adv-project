@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import joblib
 
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OrdinalEncoder
 
 
@@ -59,16 +58,43 @@ class CTRPreprocessor:
         test_size: float,
         seed: int,
     ):
-        X = df.drop(columns=[self.TARGET])
-        y = df[self.TARGET].astype(np.float32).values
+        if not 0.0 < test_size < 1.0:
+            raise ValueError("test_size must be in (0, 1)")
+        if "DateTime" not in df.columns:
+            raise ValueError("DateTime column is required for time-based split")
+        if "user_id" not in df.columns:
+            raise ValueError("user_id column is required for group split")
 
-        return train_test_split(
-            X,
-            y,
-            test_size=test_size,
-            random_state=seed,
-            stratify=y,
+        split_df = df.copy()
+        split_df["DateTime"] = pd.to_datetime(
+            split_df["DateTime"], errors="coerce"
         )
+        split_df = split_df.dropna(subset=["DateTime"])
+
+        # Time holdout: take the latest time window as validation.
+        cutoff = split_df["DateTime"].quantile(1.0 - test_size)
+        val_time_mask = split_df["DateTime"] >= cutoff
+        val_user_ids = set(split_df.loc[val_time_mask, "user_id"].tolist())
+
+        # Group holdout: users from validation window are excluded from train.
+        train_mask = (~val_time_mask) & (~split_df["user_id"].isin(val_user_ids))
+        val_mask = val_time_mask
+
+        if int(train_mask.sum()) == 0 or int(val_mask.sum()) == 0:
+            raise ValueError(
+                "Split produced an empty train/validation set. "
+                "Adjust test_size or check DateTime/user_id distribution."
+            )
+
+        train_df = split_df.loc[train_mask].copy()
+        val_df = split_df.loc[val_mask].copy()
+
+        X_train = train_df.drop(columns=[self.TARGET])
+        y_train = train_df[self.TARGET].astype(np.float32).values
+        X_val = val_df.drop(columns=[self.TARGET])
+        y_val = val_df[self.TARGET].astype(np.float32).values
+
+        return X_train, X_val, y_train, y_val
 
     # -------------------- Fit / Transform --------------------
 

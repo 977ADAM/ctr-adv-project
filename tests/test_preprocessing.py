@@ -10,6 +10,7 @@ def _make_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "DateTime": ["2024-01-01 10:00:00", "2024-01-02 11:00:00", "2024-01-03 12:00:00", "2024-01-04 13:00:00"],
+            "user_id": [1, 2, 3, 4],
             "gender": ["M", "F", None, "M"],
             "product": ["A", "B", "A", None],
             "age": [20.0, 30.0, np.nan, 40.0],
@@ -57,3 +58,35 @@ def test_save_and_load_roundtrip(tmp_path) -> None:
 
     assert np.allclose(x_num_1, x_num_2)
     assert np.array_equal(x_cat_1, x_cat_2)
+
+
+def test_make_splits_prevents_time_and_user_leakage() -> None:
+    df = pd.DataFrame(
+        {
+            "DateTime": [
+                "2024-01-01 10:00:00",
+                "2024-01-02 10:00:00",
+                "2024-01-03 10:00:00",
+                "2024-01-04 10:00:00",
+                "2024-01-05 10:00:00",
+                "2024-01-06 10:00:00",
+            ],
+            "user_id": [1, 2, 3, 1, 4, 5],
+            "gender": ["M", "F", "F", "M", "F", "M"],
+            "product": ["A", "A", "B", "B", "A", "B"],
+            "age": [20.0, 21.0, 22.0, 23.0, 24.0, 25.0],
+            "score": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            "is_click": [0, 1, 0, 1, 0, 1],
+        }
+    )
+
+    p = CTRPreprocessor()
+    x_train, x_val, _, _ = p.make_splits(df, test_size=0.33, seed=42)
+
+    train_users = set(x_train["user_id"].tolist())
+    val_users = set(x_val["user_id"].tolist())
+    assert train_users.isdisjoint(val_users)
+
+    train_ts = pd.to_datetime(x_train["DateTime"])
+    val_ts = pd.to_datetime(x_val["DateTime"])
+    assert train_ts.max() < val_ts.min()
