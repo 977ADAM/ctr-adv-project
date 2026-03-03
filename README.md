@@ -48,11 +48,15 @@ pip install -e .[dev]
 Ключевые поля, которые используются в коде:
 
 - `DateTime`
+- `user_id`
 - `gender`
 - `product`
 - `is_click` (только train)
 
 `session_id` (если есть) удаляется перед обучением/инференсом.
+
+Для train/val split обязательно нужны `DateTime`, `user_id`, `is_click`.
+Если этих колонок нет, `CTRPreprocessor.make_splits` завершится с явной ошибкой валидации схемы.
 
 ## Запуск обучения и инференса
 
@@ -97,4 +101,7 @@ mypy
 
 - корректность `Config`;
 - `fit/transform/save/load` для `CTRPreprocessor`;
-- базовые проверки `ClickDataset`, `ClickModel`, `EarlyStopping`.
+- валидация схемы и split без leakage (time + user_id);
+- базовые проверки `ClickDataset`, `ClickModel`, `EarlyStopping`;
+- `CTRInferenceService` для пустого input;
+- `Trainer` для `resume_from` checkpoint.

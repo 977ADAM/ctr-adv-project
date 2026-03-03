@@ -75,6 +75,9 @@ class CTRInferenceService:
 
     @torch.no_grad()
     def predict_proba(self, df: pd.DataFrame) -> np.ndarray:
+        if df.empty:
+            return np.array([], dtype=np.float32)
+
         X_num, X_cat = self.preprocessor.transform(df)
 
         dummy_y = np.zeros(len(X_num), dtype=np.float32)

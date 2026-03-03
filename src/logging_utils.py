@@ -5,19 +5,27 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "time": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "name": record.name,
+            "message": record.getMessage(),
+        }
+        event = getattr(record, "event", None)
+        if isinstance(event, dict):
+            payload.update(event)
+        return json.dumps(payload, ensure_ascii=False)
+
+
 def setup_logging(level: str, log_path: Optional[str] = None) -> logging.Logger:
     logger = logging.getLogger("click_cpu")
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
     logger.handlers.clear()
 
-    fmt = logging.Formatter(
-        json.dumps({
-            "time": "%(asctime)s",
-            "level": "%(levelname)s",
-            "name": "%(name)s",
-            "message": "%(message)s"
-        })
-    )
+    fmt = JsonFormatter()
 
     ch = logging.StreamHandler()
     ch.setFormatter(fmt)

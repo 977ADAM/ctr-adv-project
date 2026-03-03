@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
+from typing import List, Sequence
 
 import numpy as np
 import pandas as pd
@@ -22,6 +22,7 @@ class CTRPreprocessor:
     """
 
     TARGET = "is_click"
+    DEFAULT_CATEGORICAL_COLS = ("gender", "product")
 
     def __init__(self):
         self.scaler = StandardScaler()
@@ -34,9 +35,22 @@ class CTRPreprocessor:
         self.categorical_cols: List[str] = []
         self.numerical_cols: List[str] = []
 
+    @staticmethod
+    def _require_columns(
+        df: pd.DataFrame,
+        required_cols: Sequence[str],
+        stage: str,
+    ) -> None:
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"{stage}: missing required columns: {missing}"
+            )
+
     # -------------------- Feature engineering --------------------
 
     def _prepare_datetime(self, df: pd.DataFrame) -> pd.DataFrame:
+        self._require_columns(df, ["DateTime"], "datetime preprocessing")
         df = df.copy()
         df["DateTime"] = pd.to_datetime(df["DateTime"], errors="coerce")
         df["hour"] = df["DateTime"].dt.hour.fillna(0).astype(int)
@@ -44,7 +58,12 @@ class CTRPreprocessor:
         return df.drop(columns=["DateTime"])
 
     def _build_feature_lists(self, df: pd.DataFrame):
-        self.categorical_cols = ["gender", "product"]
+        self._require_columns(
+            df,
+            list(self.DEFAULT_CATEGORICAL_COLS),
+            "feature schema validation",
+        )
+        self.categorical_cols = list(self.DEFAULT_CATEGORICAL_COLS)
         self.numerical_cols = [
             c for c in df.columns
             if c not in self.categorical_cols + [self.TARGET]
@@ -56,20 +75,22 @@ class CTRPreprocessor:
         self,
         df: pd.DataFrame,
         test_size: float,
-        seed: int,
     ):
         if not 0.0 < test_size < 1.0:
             raise ValueError("test_size must be in (0, 1)")
-        if "DateTime" not in df.columns:
-            raise ValueError("DateTime column is required for time-based split")
-        if "user_id" not in df.columns:
-            raise ValueError("user_id column is required for group split")
+        self._require_columns(
+            df,
+            ["DateTime", "user_id", self.TARGET],
+            "train/validation split",
+        )
 
         split_df = df.copy()
         split_df["DateTime"] = pd.to_datetime(
             split_df["DateTime"], errors="coerce"
         )
         split_df = split_df.dropna(subset=["DateTime"])
+        if split_df.empty:
+            raise ValueError("train/validation split: no valid DateTime values")
 
         # Time holdout: take the latest time window as validation.
         cutoff = split_df["DateTime"].quantile(1.0 - test_size)
@@ -100,6 +121,7 @@ class CTRPreprocessor:
 
     def fit(self, df: pd.DataFrame):
         df = self._prepare_datetime(df)
+        self._require_columns(df, [self.TARGET], "fit")
         self._build_feature_lists(df)
 
         self.medians = df[self.numerical_cols].median(numeric_only=True)
@@ -114,7 +136,21 @@ class CTRPreprocessor:
         return self
 
     def transform(self, df: pd.DataFrame):
+        if not self.numerical_cols or not self.categorical_cols:
+            raise ValueError(
+                "transform: preprocessor is not fitted/loaded "
+                "(feature lists are empty)"
+            )
         df = self._prepare_datetime(df)
+        self._require_columns(
+            df,
+            self.numerical_cols + self.categorical_cols,
+            "transform",
+        )
+        if self.medians is None:
+            raise ValueError(
+                "transform: preprocessor is not fitted/loaded (medians are missing)"
+            )
 
         # числовые
         df[self.numerical_cols] = df[self.numerical_cols].fillna(self.medians)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.preprocessing import CTRPreprocessor
 
@@ -81,7 +82,7 @@ def test_make_splits_prevents_time_and_user_leakage() -> None:
     )
 
     p = CTRPreprocessor()
-    x_train, x_val, _, _ = p.make_splits(df, test_size=0.33, seed=42)
+    x_train, x_val, _, _ = p.make_splits(df, test_size=0.33)
 
     train_users = set(x_train["user_id"].tolist())
     val_users = set(x_val["user_id"].tolist())
@@ -90,3 +91,26 @@ def test_make_splits_prevents_time_and_user_leakage() -> None:
     train_ts = pd.to_datetime(x_train["DateTime"])
     val_ts = pd.to_datetime(x_val["DateTime"])
     assert train_ts.max() < val_ts.min()
+
+
+def test_make_splits_requires_user_id() -> None:
+    df = _make_df().drop(columns=["user_id"])
+
+    p = CTRPreprocessor()
+    with pytest.raises(ValueError, match="missing required columns"):
+        p.make_splits(df, test_size=0.25)
+
+
+def test_fit_validates_required_categorical_columns() -> None:
+    df = _make_df().drop(columns=["gender"])
+
+    p = CTRPreprocessor()
+    with pytest.raises(ValueError, match="missing required columns"):
+        p.fit(df)
+
+
+def test_transform_requires_fitted_preprocessor() -> None:
+    p = CTRPreprocessor()
+
+    with pytest.raises(ValueError, match="not fitted/loaded"):
+        p.transform(_make_df())

@@ -40,7 +40,7 @@ def setup_runtime(config) -> None:
     if config.num_interop_threads is not None:
         torch.set_num_interop_threads(max(1, int(config.num_interop_threads)))
 
-# --------------- Train / Validation split (БЕЗ утечки + стратификация) ------------------
+# --------------- Train / Validation split (time-based + user-group holdout) ------------------
 
 def main():
     cli = CLIParser()
@@ -52,7 +52,7 @@ def main():
 
     logger = setup_logging(config.log_level, str(artifacts_dir / "train.log"))
     logger.info(f"Run: {config.run_name}")
-    logger.info(f"Config: {json.dumps(config.to_dict(), ensure_ascii=False)}")
+    logger.info("config", extra={"event": {"config": config.to_dict()}})
 
     df = pd.read_csv(config.train_path)
     df_test = pd.read_csv(config.test_path)
@@ -68,7 +68,6 @@ def main():
     X_train, X_val, y_train, y_val = preprocessor.make_splits(
         df,
         test_size=config.test_size,
-        seed=config.seed,
     )
 
     X_train_num, X_train_cat = preprocessor.fit_transform(X_train)

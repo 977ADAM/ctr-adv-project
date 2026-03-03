@@ -1,8 +1,7 @@
 import torch
-import json
 from pathlib import Path
-from sklearn.metrics import roc_auc_score
-import numpy as np
+
+from .model import evaluate
 
 
 class Trainer:
@@ -48,7 +47,12 @@ class Trainer:
 
         for epoch in range(self.start_epoch, self.config.epochs + 1):
             tr_loss = self._train_epoch(train_loader)
-            va_loss, va_auc = self._evaluate(val_loader)
+            va_loss, va_auc = evaluate(
+                self.model,
+                val_loader,
+                self.criterion,
+                self.device,
+            )
 
             self.scheduler.step(va_auc)
             current_lr = self.optimizer.param_groups[0]["lr"]
@@ -62,7 +66,7 @@ class Trainer:
             }
 
             history.append(row)
-            self.logger.info(json.dumps(row))
+            self.logger.info("epoch_metrics", extra={"event": row})
 
             if va_auc > best_auc:
                 best_auc = va_auc
@@ -112,32 +116,3 @@ class Trainer:
             total_loss += float(loss.item())
 
         return total_loss / max(1, len(loader))
-
-    @torch.no_grad()
-    def _evaluate(self, loader):
-
-        self.model.eval()
-        total_loss = 0.0
-        all_probs = []
-        all_targets = []
-
-        for X_num, X_cat, y_batch in loader:
-            X_num = X_num.to(self.device)
-            X_cat = X_cat.to(self.device)
-            y_batch = y_batch.to(self.device)
-
-            logits = self.model((X_num, X_cat))
-            loss = self.criterion(logits, y_batch)
-            total_loss += float(loss.item())
-
-            probs = torch.sigmoid(logits).cpu().numpy().reshape(-1)
-            all_probs.append(probs)
-            all_targets.append(
-                y_batch.cpu().numpy().reshape(-1)
-            )
-
-        all_probs = np.concatenate(all_probs)
-        all_targets = np.concatenate(all_targets)
-        auc = roc_auc_score(all_targets, all_probs)
-
-        return total_loss / max(1, len(loader)), float(auc)
