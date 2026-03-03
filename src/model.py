@@ -46,54 +46,90 @@ class ClickModel(nn.Module):
     def __init__(self, num_features: int, cat_cardinalities: List[int], config):
         super().__init__()
 
-        def emb_dim(c):
-            return min(config.emb_max_dim, int(1.6 * (c ** 0.56)))
+        fm_dim = max(4, int(config.emb_max_dim))
+        self.num_features = num_features
 
-        self.embeddings = nn.ModuleList([
-            nn.Embedding(cardinality, emb_dim(cardinality), padding_idx=0)
-            for cardinality in cat_cardinalities
-        ])
+        # First-order (linear) part.
+        self.num_first_order = nn.Linear(num_features, 1)
+        self.cat_first_order = nn.ModuleList(
+            [
+                nn.Embedding(cardinality, 1, padding_idx=0)
+                for cardinality in cat_cardinalities
+            ]
+        )
 
-        emb_dim_total = sum([emb_dim(c) for c in cat_cardinalities])
-        input_dim = num_features + emb_dim_total
+        # FM embedding vectors for categorical fields.
+        self.cat_embeddings = nn.ModuleList(
+            [
+                nn.Embedding(cardinality, fm_dim, padding_idx=0)
+                for cardinality in cat_cardinalities
+            ]
+        )
+        # FM embedding vectors for numerical fields (value * vector).
+        self.num_embeddings = nn.Parameter(torch.randn(num_features, fm_dim) * 0.01)
 
+        # Deep component over concatenated dense + categorical embeddings.
+        deep_input_dim = num_features + fm_dim * len(cat_cardinalities)
         layers = []
-        prev_dim = input_dim
-
-        def get_activation(name: str):
-            name = name.lower()
-            if name == "relu":
-                return nn.ReLU()
-            if name == "gelu":
-                return nn.GELU()
-            if name == "silu":
-                return nn.SiLU()
-            raise ValueError(f"Unknown activation: {name}")
-
+        prev_dim = deep_input_dim
         for h in config.hidden_dims:
-            layers.extend([
-                nn.Linear(prev_dim, h),
-                nn.LayerNorm(h),
-                get_activation(config.activation),
-                nn.Dropout(config.dropout),
-            ])
+            layers.extend(
+                [
+                    nn.Linear(prev_dim, h),
+                    nn.LayerNorm(h),
+                    _get_activation(config.activation),
+                    nn.Dropout(config.dropout),
+                ]
+            )
             prev_dim = h
-
         layers.append(nn.Linear(prev_dim, 1))
-
-        self.mlp = nn.Sequential(*layers)
+        self.deep = nn.Sequential(*layers)
 
     def forward(self, x):
         x_num, x_cat = x
 
-        emb = [
+        cat_emb = [
             emb_layer(x_cat[:, i])
-            for i, emb_layer in enumerate(self.embeddings)
+            for i, emb_layer in enumerate(self.cat_embeddings)
         ]
-        emb = torch.cat(emb, dim=1)
+        cat_emb_stacked = torch.stack(cat_emb, dim=1)  # [B, F_cat, D]
+        cat_emb_flat = torch.cat(cat_emb, dim=1)
 
-        x = torch.cat([x_num, emb], dim=1)
-        return self.mlp(x)
+        # Linear term.
+        linear_num = self.num_first_order(x_num)
+        linear_cat = torch.stack(
+            [
+                emb_layer(x_cat[:, i]).squeeze(1)
+                for i, emb_layer in enumerate(self.cat_first_order)
+            ],
+            dim=1,
+        ).sum(dim=1, keepdim=True)
+        linear_term = linear_num + linear_cat
+
+        # FM second-order interactions over numerical + categorical fields.
+        num_emb = x_num.unsqueeze(-1) * self.num_embeddings.unsqueeze(0)  # [B, F_num, D]
+        fm_fields = torch.cat([num_emb, cat_emb_stacked], dim=1)  # [B, F_all, D]
+        sum_of_fields = fm_fields.sum(dim=1)
+        sum_square = sum_of_fields.pow(2)
+        square_sum = fm_fields.pow(2).sum(dim=1)
+        fm_term = 0.5 * (sum_square - square_sum).sum(dim=1, keepdim=True)
+
+        # Deep term.
+        deep_input = torch.cat([x_num, cat_emb_flat], dim=1)
+        deep_term = self.deep(deep_input)
+
+        return linear_term + fm_term + deep_term
+
+
+def _get_activation(name: str):
+    name = name.lower()
+    if name == "relu":
+        return nn.ReLU()
+    if name == "gelu":
+        return nn.GELU()
+    if name == "silu":
+        return nn.SiLU()
+    raise ValueError(f"Unknown activation: {name}")
 
 
 # ================= EARLY STOPPING =================
