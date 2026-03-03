@@ -12,6 +12,15 @@ from sklearn.model_selection import KFold, StratifiedKFold, TimeSeriesSplit, tra
 
 from catboost import CatBoostClassifier
 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+
+logger = logging.getLogger(__name__) 
+
 
 
 TARGET_COL = "is_click"
@@ -77,7 +86,7 @@ def parse_args() -> argparse.Namespace:
         default=Path("artifacts/catboost/test_predictions.csv"),
     )
     parser.add_argument("--val-size", type=float, default=0.2)
-    parser.add_argument("--n-splits", type=int, default=2)
+    parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=300)
     parser.add_argument("--learning-rate", type=float, default=0.03)
     parser.add_argument("--depth", type=int, default=8)
@@ -281,6 +290,10 @@ def train(
     best_iteration_list: list[float] = []
 
     for fold_idx, (tr_idx, va_idx) in enumerate(folds, start=1):
+        logger.info("=" * 60)
+        logger.info(f"FOLD {fold_idx}/{n_splits}")
+        logger.info(f"Train size: {len(tr_idx)} | Val size: {len(va_idx)}")
+
         train_df = df.iloc[tr_idx].copy()
         val_df = df.iloc[va_idx].copy()
 
@@ -306,7 +319,8 @@ def train(
             auto_class_weights="Balanced",
             depth=depth,
             random_seed=42,
-            verbose=False,
+            verbose=50,
+            logging_level="Info"
         )
         model.fit(
             x_train,
@@ -315,6 +329,11 @@ def train(
             eval_set=(x_val, y_val),
             use_best_model=True,
         )
+        best_iter = model.get_best_iteration()
+        best_score = model.get_best_score()
+
+        logger.info(f"Best iteration: {best_iter}")
+        logger.info(f"Best scores: {best_score}")
 
         val_proba = model.predict_proba(x_val)[:, 1]
         val_pred = (val_proba >= 0.5).astype(np.int32)
@@ -327,6 +346,13 @@ def train(
             "accuracy": float(accuracy_score(y_val, val_pred)),
             "best_iteration": float(max(model.get_best_iteration(), 0)),
         }
+        logger.info(
+            f"Fold {fold_idx} | "
+            f"ROC_AUC: {m['roc_auc']:.5f} | "
+            f"PR_AUC: {m['pr_auc']:.5f} | "
+            f"LogLoss: {m['log_loss']:.5f} | "
+            f"Accuracy: {m['accuracy']:.5f}"
+        )
         fold_metrics.append(m)
         best_iteration_list.append(m["best_iteration"])
 
@@ -334,6 +360,13 @@ def train(
     metric_keys = ["roc_auc", "pr_auc", "log_loss", "accuracy"]
     cv_mean = {k: float(np.nanmean([m[k] for m in fold_metrics])) for k in metric_keys}
     cv_std = {k: float(np.nanstd([m[k] for m in fold_metrics])) for k in metric_keys}
+
+    logger.info("=" * 60)
+    logger.info("CV RESULTS")
+    for k in metric_keys:
+        logger.info(
+            f"{k}: mean={cv_mean[k]:.5f} | std={cv_std[k]:.5f}"
+        )
 
     # Train final model on the full dataset using mean(best_iteration) from CV (fallback to --iterations).
     mean_best_iter = float(np.nanmean(best_iteration_list)) if best_iteration_list else float("nan")
