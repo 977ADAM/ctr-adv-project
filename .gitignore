@@ -1,6 +1,7 @@
 venv/
 __pycache__/
 snapshots/
+catboost_info/
 artifacts/
 *.png
 .pytest_cache/
