@@ -6,7 +6,7 @@ from datetime import datetime
 @dataclass
 class Config:
     # data / training
-    batch_size: int = 1024
+    batch_size: int = 256
     lr: float = 1e-3
     weight_decay: float = 1e-5
     epochs: int = 20
