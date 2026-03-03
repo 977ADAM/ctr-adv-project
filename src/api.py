@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator
 
 from .inference import CTRInferenceService
@@ -94,6 +95,10 @@ def _build_predict_request_model() -> type[BaseModel]:
 
 def _rows_to_dataframe(rows: list[BaseModel]) -> pd.DataFrame:
     return pd.DataFrame([row.model_dump() for row in rows])
+
+
+def _web_ui_path() -> Path:
+    return Path(__file__).resolve().parent / "web" / "index.html"
 
 
 def resolve_artifacts_dir() -> Path:
@@ -207,6 +212,43 @@ def create_app() -> FastAPI:
             "startup_error": app.state.startup_error,
         }
 
+    def _validate_and_predict(payload: dict[str, Any]) -> PredictResponse:
+        service = _get_service_or_503()
+        request_model = _get_predict_request_model_or_503()
+        row_model = _get_predict_row_model_or_503()
+
+        validated_payload = request_model.model_validate(payload)
+        validated_rows: list[BaseModel] = []
+        row_errors: list[dict[str, Any]] = []
+
+        payload_rows = cast(Any, validated_payload).rows
+        for idx, row in enumerate(payload_rows):
+            try:
+                validated_rows.append(row_model.model_validate(row))
+            except ValidationError as exc:
+                for err in exc.errors():
+                    loc = tuple(err.get("loc", ()))
+                    row_errors.append(
+                        {
+                            **err,
+                            "loc": ("rows", idx, *loc),
+                        }
+                    )
+
+        if row_errors:
+            raise HTTPException(status_code=422, detail=row_errors)
+
+        df = _rows_to_dataframe(validated_rows)
+        probs = service.predict_proba(df)
+        return PredictResponse(probabilities=probs.astype(float).tolist())
+
+    @app.get("/")
+    def web_ui() -> FileResponse:
+        ui = _web_ui_path()
+        if not ui.exists():
+            raise HTTPException(status_code=404, detail="Web UI file not found")
+        return FileResponse(ui)
+
     @app.get("/model-info")
     def model_info() -> dict[str, Any]:
         service = _get_service_or_503()
@@ -223,34 +265,8 @@ def create_app() -> FastAPI:
 
     @app.post("/predict", response_model=PredictResponse)
     def predict(payload: dict[str, Any]) -> PredictResponse:
-        service = _get_service_or_503()
-        request_model = _get_predict_request_model_or_503()
-        row_model = _get_predict_row_model_or_503()
         try:
-            validated_payload = request_model.model_validate(payload)
-            validated_rows: list[BaseModel] = []
-            row_errors: list[dict[str, Any]] = []
-
-            payload_rows = cast(Any, validated_payload).rows
-            for idx, row in enumerate(payload_rows):
-                try:
-                    validated_rows.append(row_model.model_validate(row))
-                except ValidationError as exc:
-                    for err in exc.errors():
-                        loc = tuple(err.get("loc", ()))
-                        row_errors.append(
-                            {
-                                **err,
-                                "loc": ("rows", idx, *loc),
-                            }
-                        )
-
-            if row_errors:
-                raise HTTPException(status_code=422, detail=row_errors)
-
-            df = _rows_to_dataframe(validated_rows)
-            probs = service.predict_proba(df)
-            return PredictResponse(probabilities=probs.astype(float).tolist())
+            return _validate_and_predict(payload)
         except HTTPException:
             raise
         except ValidationError as exc:
@@ -259,6 +275,91 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.websocket("/ws")
+    async def websocket_handler(websocket: WebSocket) -> None:
+        await websocket.accept()
+        try:
+            while True:
+                message = await websocket.receive_json()
+                msg_type = message.get("type")
+
+                if msg_type == "health":
+                    await websocket.send_json(
+                        {"type": "health", "data": health()}
+                    )
+                    continue
+
+                if msg_type == "model_info":
+                    try:
+                        data = model_info()
+                        await websocket.send_json(
+                            {"type": "model_info", "data": data}
+                        )
+                    except HTTPException as exc:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "status": exc.status_code,
+                                "detail": exc.detail,
+                            }
+                        )
+                    continue
+
+                if msg_type == "predict":
+                    payload = message.get("payload")
+                    if not isinstance(payload, dict):
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "status": 400,
+                                "detail": "predict message must include object payload",
+                            }
+                        )
+                        continue
+                    try:
+                        result = _validate_and_predict(payload)
+                        await websocket.send_json(
+                            {
+                                "type": "predict_result",
+                                "data": result.model_dump(),
+                            }
+                        )
+                    except HTTPException as exc:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "status": exc.status_code,
+                                "detail": exc.detail,
+                            }
+                        )
+                    except ValidationError as exc:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "status": 422,
+                                "detail": exc.errors(),
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "status": 500,
+                                "detail": str(exc),
+                            }
+                        )
+                    continue
+
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "status": 400,
+                        "detail": "Unknown message type",
+                    }
+                )
+        except WebSocketDisconnect:
+            return
 
     return app
 

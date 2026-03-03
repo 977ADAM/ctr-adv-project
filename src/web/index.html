@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CTR Demo Web UI</title>
+    <style>
+      :root {
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --text: #111827;
+        --muted: #6b7280;
+        --primary: #0f766e;
+        --danger: #b91c1c;
+        --border: #d1d5db;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 5% 10%, #d1fae5 0%, transparent 35%),
+          radial-gradient(circle at 90% 90%, #bfdbfe 0%, transparent 30%),
+          var(--bg);
+      }
+      .container {
+        max-width: 1000px;
+        margin: 24px auto;
+        padding: 0 16px;
+      }
+      .title {
+        margin: 0 0 8px 0;
+        font-size: 32px;
+        letter-spacing: -0.02em;
+      }
+      .subtitle {
+        margin: 0 0 24px 0;
+        color: var(--muted);
+      }
+      .grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 900px) {
+        .grid {
+          grid-template-columns: 1.2fr 1fr;
+        }
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 16px;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      .status {
+        font-weight: 600;
+      }
+      .ok { color: var(--primary); }
+      .bad { color: var(--danger); }
+      button {
+        border: 0;
+        background: var(--primary);
+        color: #fff;
+        padding: 10px 12px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button.secondary {
+        background: #334155;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      textarea {
+        width: 100%;
+        min-height: 260px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px;
+        font-family: "IBM Plex Mono", "Consolas", monospace;
+        font-size: 13px;
+      }
+      pre {
+        margin: 0;
+        overflow: auto;
+        background: #0b1020;
+        color: #d1d5db;
+        border-radius: 10px;
+        padding: 10px;
+        min-height: 120px;
+        font-family: "IBM Plex Mono", "Consolas", monospace;
+        font-size: 13px;
+      }
+    </style>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="text/babel">
+      const { useEffect, useRef, useState } = React;
+
+      function defaultPayload() {
+        return JSON.stringify({
+          rows: [
+            {
+              DateTime: "2017-07-08 00:00",
+              user_id: 732573,
+              gender: "Male",
+              product: "J",
+              campaign_id: 404347,
+              webpage_id: 53587,
+              user_group_id: 5,
+              product_category_1: 1,
+              product_category_2: null,
+              age_level: 5,
+              user_depth: 3,
+              city_development_index: null,
+              var_1: 0
+            }
+          ]
+        }, null, 2);
+      }
+
+      function App() {
+        const wsRef = useRef(null);
+        const [connected, setConnected] = useState(false);
+        const [payloadText, setPayloadText] = useState(defaultPayload());
+        const [lastMessage, setLastMessage] = useState("{}");
+        const [modelInfo, setModelInfo] = useState({});
+
+        function wsUrl() {
+          const proto = window.location.protocol === "https:" ? "wss" : "ws";
+          return `${proto}://${window.location.host}/ws`;
+        }
+
+        function connect() {
+          const ws = new WebSocket(wsUrl());
+          wsRef.current = ws;
+
+          ws.onopen = () => {
+            setConnected(true);
+            send({ type: "health" });
+          };
+
+          ws.onclose = () => {
+            setConnected(false);
+          };
+
+          ws.onmessage = (event) => {
+            setLastMessage(event.data);
+            try {
+              const msg = JSON.parse(event.data);
+              if (msg.type === "model_info") {
+                setModelInfo(msg.data || {});
+              }
+            } catch (e) {
+              // ignore parse failures
+            }
+          };
+        }
+
+        function send(message) {
+          if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+            setLastMessage(JSON.stringify({ type: "error", detail: "WebSocket is not connected" }, null, 2));
+            return;
+          }
+          wsRef.current.send(JSON.stringify(message));
+        }
+
+        function requestHealth() {
+          send({ type: "health" });
+        }
+
+        function requestModelInfo() {
+          send({ type: "model_info" });
+        }
+
+        function sendPredict() {
+          try {
+            const payload = JSON.parse(payloadText);
+            send({ type: "predict", payload });
+          } catch (error) {
+            setLastMessage(JSON.stringify({ type: "error", detail: "Invalid JSON payload" }, null, 2));
+          }
+        }
+
+        useEffect(() => {
+          connect();
+          return () => {
+            if (wsRef.current) {
+              wsRef.current.close();
+            }
+          };
+        }, []);
+
+        return (
+          <div className="container">
+            <h1 className="title">CTR Demo Web UI</h1>
+            <p className="subtitle">React + WebSocket interface for /ws prediction flow.</p>
+
+            <div className="grid">
+              <section className="card">
+                <div className="row">
+                  <span className={`status ${connected ? "ok" : "bad"}`}>
+                    {connected ? "Connected" : "Disconnected"}
+                  </span>
+                  <button className="secondary" onClick={connect}>Reconnect</button>
+                  <button onClick={requestHealth} disabled={!connected}>Health</button>
+                  <button onClick={requestModelInfo} disabled={!connected}>Model Info</button>
+                  <button onClick={sendPredict} disabled={!connected}>Predict</button>
+                </div>
+                <textarea
+                  value={payloadText}
+                  onChange={(e) => setPayloadText(e.target.value)}
+                />
+              </section>
+
+              <section className="card">
+                <h3>Model Info</h3>
+                <pre>{JSON.stringify(modelInfo, null, 2)}</pre>
+                <h3 style={{ marginTop: 16 }}>Last WS Message</h3>
+                <pre>{lastMessage}</pre>
+              </section>
+            </div>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    </script>
+  </body>
+</html>

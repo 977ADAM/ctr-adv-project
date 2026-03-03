@@ -125,6 +125,7 @@ uvicorn src.api:app --host 0.0.0.0 --port 8080
 - `GET /health` — статус сервиса и путь к артефактам (`degraded`, если модель не загрузилась)
 - `GET /model-info` — информация о признаках/кардинальностях из `meta.json`
 - `POST /predict` — инференс по батчу строк с ранней валидацией схемы
+- `WS /ws` — WebSocket API для `health`, `model_info`, `predict`
 
 Схема `POST /predict` строится динамически при старте из артефактов (`meta.json`):
 
@@ -137,6 +138,11 @@ uvicorn src.api:app --host 0.0.0.0 --port 8080
 
 Точный список обязательных полей можно получить через `GET /model-info`
 в поле `required_predict_fields`.
+
+Web UI:
+
+- `GET /` — React интерфейс, который работает через WebSocket (`/ws`)
+- в UI можно отправлять payload для предсказаний и смотреть ответы сервера
 
 Пример `POST /predict`:
 
