@@ -109,7 +109,7 @@ mypy
 Локальный запуск:
 
 ```bash
-uvicorn src.api:app --host 0.0.0.0 --port 8080
+uvicorn src.api:app --host 127.0.0.1 --port 8080
 ```
 
 По умолчанию сервис ищет последний валидный run в `artifacts/click_model/*`.
@@ -117,7 +117,7 @@ uvicorn src.api:app --host 0.0.0.0 --port 8080
 
 ```bash
 export MODEL_ARTIFACTS_DIR=./artifacts/click_model/<run_name>
-uvicorn src.api:app --host 0.0.0.0 --port 8080
+uvicorn src.api:app --host 127.0.0.1 --port 8080
 ```
 
 Эндпоинты:
