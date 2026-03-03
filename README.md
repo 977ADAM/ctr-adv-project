@@ -126,20 +126,17 @@ uvicorn src.api:app --host 0.0.0.0 --port 8080
 - `GET /model-info` — информация о признаках/кардинальностях из `meta.json`
 - `POST /predict` — инференс по батчу строк с ранней валидацией схемы
 
-Схема `POST /predict` (`rows: list[PredictRow]`):
+Схема `POST /predict` строится динамически при старте из артефактов (`meta.json`):
 
-- обязательные поля:
-  - `DateTime: str` (валидная datetime-строка, `null` запрещен)
-  - `user_id: int | null`
-  - `gender: str | null`
-  - `product: str | null`
-  - `campaign_id: int | null`
-  - `webpage_id: int | null`
-  - `user_group_id: float | int | null`
-  - `product_category_1: float | int | null`
-  - `product_category_2: float | int | null`
+- обязательный `DateTime: str` (валидная datetime-строка, `null` запрещен)
+- остальные обязательные поля берутся из `numerical_cols + categorical_cols`
+  (кроме инженерных `hour/dayofweek`, которые считаются из `DateTime`)
 - дополнительные (`extra`) поля разрешены
-- при ошибке схемы/типов API возвращает `422 Unprocessable Entity`
+- при отсутствии обязательных полей или ошибке типов API возвращает
+  `422 Unprocessable Entity` с явными деталями по полям
+
+Точный список обязательных полей можно получить через `GET /model-info`
+в поле `required_predict_fields`.
 
 Пример `POST /predict`:
 
