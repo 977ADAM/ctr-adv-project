@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -60,25 +61,52 @@ def resolve_artifacts_dir() -> Path:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="CTR Demo API", version="1.0.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.artifacts_dir = None
+        app.state.service = None
+        app.state.startup_error = None
+        try:
+            artifacts_dir = resolve_artifacts_dir()
+            service = CTRInferenceService(artifacts_dir=artifacts_dir)
+            app.state.artifacts_dir = artifacts_dir
+            app.state.service = service
+        except Exception as exc:  # noqa: BLE001
+            app.state.startup_error = str(exc)
+        yield
 
-    artifacts_dir = resolve_artifacts_dir()
-    service = CTRInferenceService(artifacts_dir=artifacts_dir)
+    app = FastAPI(title="CTR Demo API", version="1.0.0", lifespan=lifespan)
 
-    app.state.artifacts_dir = artifacts_dir
-    app.state.service = service
+    def _get_service_or_503() -> CTRInferenceService:
+        service = app.state.service
+        if service is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Model is not loaded. "
+                    f"Startup error: {app.state.startup_error}"
+                ),
+            )
+        return service
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        service = app.state.service
         return {
-            "status": "ok",
-            "artifacts_dir": str(app.state.artifacts_dir),
-            "model_loaded": app.state.service.model is not None,
+            "status": "ok" if service is not None else "degraded",
+            "artifacts_dir": (
+                str(app.state.artifacts_dir)
+                if app.state.artifacts_dir is not None
+                else None
+            ),
+            "model_loaded": service is not None and service.model is not None,
+            "startup_error": app.state.startup_error,
         }
 
     @app.get("/model-info")
     def model_info() -> dict[str, Any]:
-        meta = app.state.service.meta or {}
+        service = _get_service_or_503()
+        meta = service.meta or {}
         return {
             "artifacts_dir": str(app.state.artifacts_dir),
             "numerical_cols": meta.get("numerical_cols", []),
@@ -90,9 +118,10 @@ def create_app() -> FastAPI:
 
     @app.post("/predict", response_model=PredictResponse)
     def predict(payload: PredictRequest) -> PredictResponse:
+        service = _get_service_or_503()
         try:
             df = pd.DataFrame(payload.rows)
-            probs = app.state.service.predict_proba(df)
+            probs = service.predict_proba(df)
             return PredictResponse(probabilities=probs.astype(float).tolist())
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
