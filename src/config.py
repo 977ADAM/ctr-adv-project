@@ -6,12 +6,12 @@ from datetime import datetime
 @dataclass
 class Config:
     # data / training
-    batch_size: int = 256
-    lr: float = 1e-3
+    batch_size: int = 512
+    lr: float = 2e-3
     weight_decay: float = 1e-5
     epochs: int = 20
     seed: int = 42
-    num_workers: int = 0
+    num_workers: int = 4
     grad_clip: float = 1.0
     early_stopping_patience: int = 7
     test_size: float = 0.2
