@@ -159,14 +159,11 @@ Web UI:
 UI переведен на production-сборку (без runtime Babel/CDN React):
 
 ```bash
-cd web-ui
+cd web
 npm install
 npm run build
 ```
 
-Сборка кладется в `src/web/dist`, после чего API отдает UI на `GET /`.
-Кнопка `Fill required fields` в UI подставляет поля автоматически из
-`/model-info.required_predict_fields`.
 
 Пример `POST /predict`:
 
