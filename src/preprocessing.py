@@ -133,9 +133,10 @@ class CTRPreprocessor:
         train_df = split_df.loc[train_mask].copy()
         val_df = split_df.loc[val_mask].copy()
 
-        X_train = train_df.drop(columns=[self.TARGET])
+        # Keep target in returned feature frames because fit() expects it.
+        X_train = train_df
         y_train = train_df[self.TARGET].astype(np.float32).values
-        X_val = val_df.drop(columns=[self.TARGET])
+        X_val = val_df
         y_val = val_df[self.TARGET].astype(np.float32).values
 
         return X_train, X_val, y_train, y_val
