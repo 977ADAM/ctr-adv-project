@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .inference import CTRInferenceService
 
@@ -21,7 +21,7 @@ REQUIRED_ARTIFACT_FILES = (
 
 
 class PredictRequest(BaseModel):
-    rows: list[dict[str, Any]] = Field(
+    rows: list["PredictRow"] = Field(
         ...,
         description="Rows for CTR prediction.",
         min_length=1,
@@ -30,6 +30,35 @@ class PredictRequest(BaseModel):
 
 class PredictResponse(BaseModel):
     probabilities: list[float]
+
+
+class PredictRow(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    DateTime: str
+    user_id: int | None
+    gender: str | None
+    product: str | None
+    campaign_id: int | None
+    webpage_id: int | None
+    user_group_id: float | int | None
+    product_category_1: float | int | None
+    product_category_2: float | int | None
+
+    @field_validator("DateTime")
+    @classmethod
+    def validate_datetime(cls, value: str) -> str:
+        if value is None or value.strip() == "":
+            raise ValueError("DateTime must be a valid datetime string")
+        try:
+            pd.to_datetime(value, errors="raise")
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("DateTime must be a valid datetime string") from exc
+        return value
+
+
+def _rows_to_dataframe(rows: list[PredictRow]) -> pd.DataFrame:
+    return pd.DataFrame([row.model_dump() for row in rows])
 
 
 def resolve_artifacts_dir() -> Path:
@@ -76,6 +105,9 @@ def create_app() -> FastAPI:
         yield
 
     app = FastAPI(title="CTR Demo API", version="1.0.0", lifespan=lifespan)
+    app.state.artifacts_dir = None
+    app.state.service = None
+    app.state.startup_error = None
 
     def _get_service_or_503() -> CTRInferenceService:
         service = app.state.service
@@ -120,7 +152,7 @@ def create_app() -> FastAPI:
     def predict(payload: PredictRequest) -> PredictResponse:
         service = _get_service_or_503()
         try:
-            df = pd.DataFrame(payload.rows)
+            df = _rows_to_dataframe(payload.rows)
             probs = service.predict_proba(df)
             return PredictResponse(probabilities=probs.astype(float).tolist())
         except ValueError as exc:

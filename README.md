@@ -124,7 +124,22 @@ uvicorn src.api:app --host 0.0.0.0 --port 8080
 
 - `GET /health` — статус сервиса и путь к артефактам (`degraded`, если модель не загрузилась)
 - `GET /model-info` — информация о признаках/кардинальностях из `meta.json`
-- `POST /predict` — инференс по батчу строк
+- `POST /predict` — инференс по батчу строк с ранней валидацией схемы
+
+Схема `POST /predict` (`rows: list[PredictRow]`):
+
+- обязательные поля:
+  - `DateTime: str` (валидная datetime-строка, `null` запрещен)
+  - `user_id: int | null`
+  - `gender: str | null`
+  - `product: str | null`
+  - `campaign_id: int | null`
+  - `webpage_id: int | null`
+  - `user_group_id: float | int | null`
+  - `product_category_1: float | int | null`
+  - `product_category_2: float | int | null`
+- дополнительные (`extra`) поля разрешены
+- при ошибке схемы/типов API возвращает `422 Unprocessable Entity`
 
 Пример `POST /predict`:
 
