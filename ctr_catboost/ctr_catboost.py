@@ -10,24 +10,48 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, average_precision_score, log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 
-try:
-    from catboost import CatBoostClassifier
-except ImportError as exc:
-    CatBoostClassifier = None
-    _CATBOOST_IMPORT_ERROR = exc
-else:
-    _CATBOOST_IMPORT_ERROR = None
+from catboost import CatBoostClassifier
+
 
 
 TARGET_COL = "is_click"
 DEFAULT_CATEGORICAL_COLS = (
     "gender",
     "product",
+    "user_id",
     "campaign_id",
     "webpage_id",
     "user_group_id",
     "product_category_1",
     "product_category_2",
+    "age_level",
+    "user_depth",
+    "city_development_index",
+    "var_1",
+)
+INTERACTION_FEATURE_PAIRS = (
+    ("campaign_id", "webpage_id"),
+    ("product", "campaign_id"),
+    ("product", "webpage_id"),
+    ("product", "gender"),
+    ("user_group_id", "product_category_1"),
+)
+MISSING_FLAG_COLS = (
+    "product_category_2",
+    "gender",
+    "user_group_id",
+    "age_level",
+    "user_depth",
+    "city_development_index",
+)
+FREQUENCY_FEATURE_COLS = (
+    "user_id",
+    "campaign_id",
+    "webpage_id",
+    "product",
+    "product_category_1",
+    "product_category_2",
+    "campaign_id__webpage_id",
 )
 
 
@@ -53,8 +77,8 @@ def parse_args() -> argparse.Namespace:
         default=Path("artifacts/catboost/test_predictions.csv"),
     )
     parser.add_argument("--val-size", type=float, default=0.2)
-    parser.add_argument("--iterations", type=int, default=400)
-    parser.add_argument("--learning-rate", type=float, default=0.08)
+    parser.add_argument("--iterations", type=int, default=300)
+    parser.add_argument("--learning-rate", type=float, default=0.03)
     parser.add_argument("--depth", type=int, default=8)
     return parser.parse_args()
 
@@ -65,8 +89,71 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
         dt = pd.to_datetime(df["DateTime"], errors="coerce")
         df["hour"] = dt.dt.hour.fillna(0).astype(int)
         df["dayofweek"] = dt.dt.dayofweek.fillna(0).astype(int)
+        df["day"] = dt.dt.day.fillna(0).astype(int)
+        df["month"] = dt.dt.month.fillna(0).astype(int)
+        df["weekofyear"] = dt.dt.isocalendar().week.fillna(0).astype(int)
+        df["is_weekend"] = df["dayofweek"].isin([5, 6]).astype(np.int8)
+        df["hour_sin"] = np.sin((2.0 * np.pi * df["hour"]) / 24.0)
+        df["hour_cos"] = np.cos((2.0 * np.pi * df["hour"]) / 24.0)
+        df["dayofweek_sin"] = np.sin((2.0 * np.pi * df["dayofweek"]) / 7.0)
+        df["dayofweek_cos"] = np.cos((2.0 * np.pi * df["dayofweek"]) / 7.0)
         df = df.drop(columns=["DateTime"])
     return df
+
+
+def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for left, right in INTERACTION_FEATURE_PAIRS:
+        if left in df.columns and right in df.columns:
+            left_val = df[left].astype("string").fillna("MISSING")
+            right_val = df[right].astype("string").fillna("MISSING")
+            df[f"{left}__{right}"] = (left_val + "_" + right_val).astype(str)
+    return df
+
+
+def add_missing_value_flags(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for col in MISSING_FLAG_COLS:
+        if col in df.columns:
+            df[f"{col}_is_missing"] = df[col].isna().astype(np.int8)
+    return df
+
+
+def build_frequency_maps(df: pd.DataFrame) -> dict[str, dict[str, float]]:
+    frequency_maps: dict[str, dict[str, float]] = {}
+    for col in FREQUENCY_FEATURE_COLS:
+        if col not in df.columns:
+            continue
+        values = df[col].astype("string").fillna("MISSING").astype(str)
+        frequency_maps[col] = values.value_counts(normalize=True).to_dict()
+    return frequency_maps
+
+
+def add_frequency_features(
+    df: pd.DataFrame, frequency_maps: dict[str, dict[str, float]]
+) -> pd.DataFrame:
+    df = df.copy()
+    for col, col_freq_map in frequency_maps.items():
+        feat_col = f"{col}_freq"
+        if col in df.columns:
+            values = df[col].astype("string").fillna("MISSING").astype(str)
+            df[feat_col] = values.map(col_freq_map).fillna(0.0).astype(np.float32)
+        else:
+            df[feat_col] = np.zeros(len(df), dtype=np.float32)
+    return df
+
+
+def build_feature_frame(
+    df: pd.DataFrame,
+    frequency_maps: dict[str, dict[str, float]] | None = None,
+) -> tuple[pd.DataFrame, dict[str, dict[str, float]]]:
+    x = add_time_features(df)
+    x = add_missing_value_flags(x)
+    x = add_interaction_features(x)
+    if frequency_maps is None:
+        frequency_maps = build_frequency_maps(x)
+    x = add_frequency_features(x, frequency_maps)
+    return x, frequency_maps
 
 
 def choose_categorical_columns(df: pd.DataFrame) -> list[str]:
@@ -77,6 +164,7 @@ def choose_categorical_columns(df: pd.DataFrame) -> list[str]:
         if c not in explicit_categorical
         and (
             pd.api.types.is_object_dtype(df[c])
+            or pd.api.types.is_string_dtype(df[c])
             or pd.api.types.is_bool_dtype(df[c])
             or isinstance(df[c].dtype, pd.CategoricalDtype)
         )
@@ -88,8 +176,9 @@ def prepare_features(
     df: pd.DataFrame,
     feature_columns: list[str] | None = None,
     categorical_cols: list[str] | None = None,
-) -> tuple[pd.DataFrame, list[str], list[str]]:
-    x = add_time_features(df)
+    frequency_maps: dict[str, dict[str, float]] | None = None,
+) -> tuple[pd.DataFrame, list[str], list[str], dict[str, dict[str, float]]]:
+    x, frequency_maps = build_feature_frame(df, frequency_maps=frequency_maps)
 
     if feature_columns is None:
         feature_columns = list(x.columns)
@@ -107,7 +196,7 @@ def prepare_features(
     for col in categorical_cols:
         x[col] = x[col].astype("string").fillna("MISSING").astype(str)
 
-    return x, feature_columns, categorical_cols
+    return x, feature_columns, categorical_cols, frequency_maps
 
 
 def time_aware_split(df: pd.DataFrame, val_size: float) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -152,7 +241,7 @@ def train(
     if CatBoostClassifier is None:
         raise ImportError(
             "CatBoost is not installed. Install it with: pip install catboost"
-        ) from _CATBOOST_IMPORT_ERROR
+        )
 
     df = pd.read_csv(train_path)
     if TARGET_COL not in df.columns:
@@ -162,13 +251,14 @@ def train(
     y_train = train_df[TARGET_COL].astype(np.int32).to_numpy()
     y_val = val_df[TARGET_COL].astype(np.int32).to_numpy()
 
-    x_train, feature_columns, categorical_cols = prepare_features(
+    x_train, feature_columns, categorical_cols, frequency_maps = prepare_features(
         train_df.drop(columns=[TARGET_COL])
     )
-    x_val, _, _ = prepare_features(
+    x_val, _, _, _ = prepare_features(
         val_df.drop(columns=[TARGET_COL]),
         feature_columns=feature_columns,
         categorical_cols=categorical_cols,
+        frequency_maps=frequency_maps,
     )
     cat_feature_indices = [x_train.columns.get_loc(col) for col in categorical_cols]
 
@@ -177,6 +267,7 @@ def train(
         eval_metric="AUC",
         iterations=iterations,
         learning_rate=learning_rate,
+        auto_class_weights="Balanced",
         depth=depth,
         random_seed=42,
         verbose=False,
@@ -202,6 +293,7 @@ def train(
         "model": model,
         "feature_columns": feature_columns,
         "categorical_columns": categorical_cols,
+        "frequency_maps": frequency_maps,
     }
     return bundle, metrics
 
@@ -235,14 +327,17 @@ def make_test_predictions(
 
     feature_columns = bundle["feature_columns"]
     categorical_cols = bundle["categorical_columns"]
+    frequency_maps = bundle.get("frequency_maps", {})
     model = bundle["model"]
     assert isinstance(feature_columns, list)
     assert isinstance(categorical_cols, list)
+    assert isinstance(frequency_maps, dict)
 
-    x_test, _, _ = prepare_features(
+    x_test, _, _, _ = prepare_features(
         test_df,
         feature_columns=feature_columns,
         categorical_cols=categorical_cols,
+        frequency_maps=frequency_maps,
     )
     proba = model.predict_proba(x_test)[:, 1]
 
