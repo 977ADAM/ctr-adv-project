@@ -164,6 +164,11 @@ npm install
 npm run build
 ```
 
+Сборка кладется в `web/dist`, а API отдает:
+
+- `GET /` -> `web/dist/index.html`
+- `GET /assets/*` -> статика Vite (JS/CSS)
+
 
 Пример `POST /predict`:
 

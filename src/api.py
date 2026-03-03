@@ -12,6 +12,7 @@ from typing import Any, cast
 import pandas as pd
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator
 
 from .inference import CTRInferenceService
@@ -103,7 +104,7 @@ def _rows_to_dataframe(rows: list[BaseModel]) -> pd.DataFrame:
 
 
 def _web_ui_path() -> Path:
-    return Path(__file__).resolve().parent / "web" / "dist" / "index.html"
+    return Path(__file__).resolve().parents[1] / "web" / "dist" / "index.html"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -186,6 +187,12 @@ def create_app() -> FastAPI:
     app.state.rate_limit_rpm = _env_int("RATE_LIMIT_RPM", 120)
     app.state.rate_limit_window_sec = 60.0
     app.state.rate_limit_hits = defaultdict(deque)
+    web_dist_dir = Path(__file__).resolve().parents[1] / "web" / "dist"
+    app.mount(
+        "/assets",
+        StaticFiles(directory=web_dist_dir / "assets", check_dir=False),
+        name="web-assets",
+    )
 
     def _get_service_or_503() -> CTRInferenceService:
         service = app.state.service

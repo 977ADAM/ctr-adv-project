@@ -1,8 +1,8 @@
 FROM node:20-alpine AS web-builder
-WORKDIR /web-ui
-COPY web-ui/package.json ./
+WORKDIR /web
+COPY web/package.json ./
 RUN npm install
-COPY web-ui .
+COPY web .
 RUN npm run build
 
 FROM python:3.11-slim
@@ -13,8 +13,9 @@ ENV PYTHONUNBUFFERED=1
 
 COPY pyproject.toml README.md /app/
 COPY src /app/src
+COPY web /app/web
 COPY artifacts /app/artifacts
-COPY --from=web-builder /web-ui/dist /app/src/web/dist
+COPY --from=web-builder /web/dist /app/web/dist
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir . \
