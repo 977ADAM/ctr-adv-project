@@ -7,6 +7,7 @@
 - читает `train/test` CSV;
 - строит признаки из `DateTime` (`hour`, `dayofweek`);
 - обрабатывает пропуски;
+- типизирует признаки на числовые/категориальные;
 - кодирует категориальные признаки через `OrdinalEncoder`;
 - обучает MLP с embedding-слоями для категориальных фич;
 - сохраняет артефакты обучения;
@@ -51,6 +52,11 @@ pip install -e .[dev]
 - `user_id`
 - `gender`
 - `product`
+- `campaign_id`
+- `webpage_id`
+- `user_group_id`
+- `product_category_1`
+- `product_category_2`
 - `is_click` (только train)
 
 `session_id` (если есть) удаляется перед обучением/инференсом.

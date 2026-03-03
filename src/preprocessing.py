@@ -22,7 +22,15 @@ class CTRPreprocessor:
     """
 
     TARGET = "is_click"
-    DEFAULT_CATEGORICAL_COLS = ("gender", "product")
+    DEFAULT_CATEGORICAL_COLS = (
+        "gender",
+        "product",
+        "campaign_id",
+        "webpage_id",
+        "user_group_id",
+        "product_category_1",
+        "product_category_2",
+    )
 
     def __init__(self):
         self.scaler = StandardScaler()
@@ -58,12 +66,27 @@ class CTRPreprocessor:
         return df.drop(columns=["DateTime"])
 
     def _build_feature_lists(self, df: pd.DataFrame):
-        self._require_columns(
-            df,
-            list(self.DEFAULT_CATEGORICAL_COLS),
-            "feature schema validation",
-        )
-        self.categorical_cols = list(self.DEFAULT_CATEGORICAL_COLS)
+        base_categorical = [
+            c for c in self.DEFAULT_CATEGORICAL_COLS if c in df.columns
+        ]
+        if not base_categorical:
+            raise ValueError(
+                "feature schema validation: none of expected categorical columns "
+                f"were found: {list(self.DEFAULT_CATEGORICAL_COLS)}"
+            )
+
+        inferred_object_like = [
+            c
+            for c in df.columns
+            if c not in base_categorical + [self.TARGET]
+            and (
+                pd.api.types.is_object_dtype(df[c])
+                or isinstance(df[c].dtype, pd.CategoricalDtype)
+                or pd.api.types.is_bool_dtype(df[c])
+            )
+        ]
+
+        self.categorical_cols = base_categorical + inferred_object_like
         self.numerical_cols = [
             c for c in df.columns
             if c not in self.categorical_cols + [self.TARGET]
@@ -124,11 +147,20 @@ class CTRPreprocessor:
         self._require_columns(df, [self.TARGET], "fit")
         self._build_feature_lists(df)
 
+        if not self.numerical_cols:
+            raise ValueError("fit: no numerical features detected")
+        if not self.categorical_cols:
+            raise ValueError("fit: no categorical features detected")
+
+        df[self.numerical_cols] = df[self.numerical_cols].apply(
+            pd.to_numeric, errors="coerce"
+        )
         self.medians = df[self.numerical_cols].median(numeric_only=True)
         df[self.numerical_cols] = df[self.numerical_cols].fillna(self.medians)
 
-        # 🔥 добавляем это
-        df[self.categorical_cols] = df[self.categorical_cols].fillna("UNK")
+        df[self.categorical_cols] = (
+            df[self.categorical_cols].fillna("UNK").astype(str)
+        )
 
         self.scaler.fit(df[self.numerical_cols])
         self.cat_encoder.fit(df[self.categorical_cols])
@@ -152,18 +184,20 @@ class CTRPreprocessor:
                 "transform: preprocessor is not fitted/loaded (medians are missing)"
             )
 
-        # числовые
+        df[self.numerical_cols] = df[self.numerical_cols].apply(
+            pd.to_numeric, errors="coerce"
+        )
         df[self.numerical_cols] = df[self.numerical_cols].fillna(self.medians)
 
-        # 🔥 ВАЖНО: заполняем NaN в категориальных
-        df[self.categorical_cols] = df[self.categorical_cols].fillna("UNK")
+        df[self.categorical_cols] = (
+            df[self.categorical_cols].fillna("UNK").astype(str)
+        )
 
-        # encoder
         X_num = self.scaler.transform(df[self.numerical_cols])
+        X_num = X_num.astype(np.float32)
 
         X_cat_raw = self.cat_encoder.transform(df[self.categorical_cols])
 
-        # безопасная обработка nan
         X_cat_raw = np.nan_to_num(X_cat_raw, nan=-1)
 
         X_cat = X_cat_raw.astype(np.int64) + 1

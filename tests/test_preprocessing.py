@@ -10,10 +10,20 @@ from src.preprocessing import CTRPreprocessor
 def _make_df() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "DateTime": ["2024-01-01 10:00:00", "2024-01-02 11:00:00", "2024-01-03 12:00:00", "2024-01-04 13:00:00"],
+            "DateTime": [
+                "2024-01-01 10:00:00",
+                "2024-01-02 11:00:00",
+                "2024-01-03 12:00:00",
+                "2024-01-04 13:00:00",
+            ],
             "user_id": [1, 2, 3, 4],
             "gender": ["M", "F", None, "M"],
             "product": ["A", "B", "A", None],
+            "campaign_id": [1001, 1002, 1001, 1003],
+            "webpage_id": [200, 201, 202, 200],
+            "user_group_id": [10.0, 11.0, 12.0, np.nan],
+            "product_category_1": [4, 2, 4, 1],
+            "product_category_2": [np.nan, 6.0, 7.0, 8.0],
             "age": [20.0, 30.0, np.nan, 40.0],
             "score": [0.1, 0.2, 0.3, np.nan],
             "is_click": [0, 1, 0, 1],
@@ -28,9 +38,12 @@ def test_fit_transform_produces_numeric_and_categorical_arrays() -> None:
     x_num, x_cat = p.fit_transform(df)
 
     assert x_num.shape[0] == len(df)
-    assert x_cat.shape == (len(df), 2)
-    assert x_num.dtype == np.float64
+    assert x_cat.shape == (len(df), len(p.categorical_cols))
+    assert x_num.dtype == np.float32
     assert x_cat.dtype == np.int64
+    assert set(
+        ["campaign_id", "webpage_id", "user_group_id", "product_category_1"]
+    ).issubset(set(p.categorical_cols))
 
 
 def test_transform_handles_unknown_categories_as_zero_or_positive() -> None:
@@ -38,6 +51,7 @@ def test_transform_handles_unknown_categories_as_zero_or_positive() -> None:
     test_df = train_df.copy()
     test_df.loc[0, "gender"] = "UNKNOWN_GENDER"
     test_df.loc[1, "product"] = "UNKNOWN_PRODUCT"
+    test_df.loc[2, "campaign_id"] = 999999
 
     p = CTRPreprocessor().fit(train_df)
     _, x_cat = p.transform(test_df)
@@ -102,10 +116,20 @@ def test_make_splits_requires_user_id() -> None:
 
 
 def test_fit_validates_required_categorical_columns() -> None:
-    df = _make_df().drop(columns=["gender"])
+    df = _make_df().drop(
+        columns=[
+            "gender",
+            "product",
+            "campaign_id",
+            "webpage_id",
+            "user_group_id",
+            "product_category_1",
+            "product_category_2",
+        ]
+    )
 
     p = CTRPreprocessor()
-    with pytest.raises(ValueError, match="missing required columns"):
+    with pytest.raises(ValueError, match="none of expected categorical columns"):
         p.fit(df)
 
 
