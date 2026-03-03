@@ -109,7 +109,7 @@ mypy
 Локальный запуск:
 
 ```bash
-uvicorn src.api:app --host 0.0.0.0 --port 8000
+uvicorn src.api:app --host 0.0.0.0 --port 8080
 ```
 
 По умолчанию сервис ищет последний валидный run в `artifacts/click_model/*`.
@@ -117,7 +117,7 @@ uvicorn src.api:app --host 0.0.0.0 --port 8000
 
 ```bash
 export MODEL_ARTIFACTS_DIR=./artifacts/click_model/<run_name>
-uvicorn src.api:app --host 0.0.0.0 --port 8000
+uvicorn src.api:app --host 0.0.0.0 --port 8080
 ```
 
 Эндпоинты:
@@ -129,7 +129,7 @@ uvicorn src.api:app --host 0.0.0.0 --port 8000
 Пример `POST /predict`:
 
 ```bash
-curl -X POST http://localhost:8000/predict \
+curl -X POST http://localhost:8080/predict \
   -H "Content-Type: application/json" \
   -d '{
     "rows": [
@@ -160,7 +160,7 @@ curl -X POST http://localhost:8000/predict \
 docker compose up --build
 ```
 
-Сервис будет доступен на `http://localhost:8000`.
+Сервис будет доступен на `http://localhost:8080`.
 
 ## Тесты
 
