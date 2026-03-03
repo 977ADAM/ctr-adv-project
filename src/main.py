@@ -9,18 +9,32 @@ import pandas as pd
 import torch
 from torch import nn
 
-from .config import get_default_config
-from .logging_utils import setup_logging
-from .trainer import Trainer
-from .cli import CLIParser
-from .preprocessing import CTRPreprocessor
-from .inference import CTRInferenceService
-from .model import (
-    ClickModel,
-    ClickDataset,
-    EarlyStopping,
-    make_loader,
-)
+try:
+    from config import get_default_config
+    from logging_utils import setup_logging
+    from trainer import Trainer
+    from cli import CLIParser
+    from preprocessing import CTRPreprocessor
+    from inference import CTRInferenceService
+    from model import (
+        ClickModel,
+        ClickDataset,
+        EarlyStopping,
+        make_loader,
+    )
+except ImportError:
+    from .config import get_default_config
+    from .logging_utils import setup_logging
+    from .trainer import Trainer
+    from .cli import CLIParser
+    from .preprocessing import CTRPreprocessor
+    from .inference import CTRInferenceService
+    from .model import (
+        ClickModel,
+        ClickDataset,
+        EarlyStopping,
+        make_loader,
+    )
 
 
 def set_seed(seed: int, deterministic: bool):

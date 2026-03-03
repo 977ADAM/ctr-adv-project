@@ -8,9 +8,14 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .preprocessing import CTRPreprocessor
-from .model import ClickModel, ClickDataset, make_loader
-from .config import Config
+try:
+    from preprocessing import CTRPreprocessor
+    from model import ClickModel, ClickDataset, make_loader
+    from config import Config
+except ImportError:
+    from .preprocessing import CTRPreprocessor
+    from .model import ClickModel, ClickDataset, make_loader
+    from .config import Config
 
 
 class CTRInferenceService:

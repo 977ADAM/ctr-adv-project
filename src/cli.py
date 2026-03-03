@@ -4,8 +4,10 @@ import argparse
 from dataclasses import asdict
 from typing import Sequence
 
-from .config import Config
-
+try:
+    from config import Config
+except ImportError:
+    from .config import Config
 
 class CLIParser:
     """

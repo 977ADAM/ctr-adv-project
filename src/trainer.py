@@ -2,8 +2,10 @@ import torch
 from pathlib import Path
 import numpy as np
 
-from .model import evaluate
-
+try:
+    from model import evaluate
+except ImportError:
+    from .model import evaluate
 
 class Trainer:
     def __init__(
