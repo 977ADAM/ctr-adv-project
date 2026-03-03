@@ -320,7 +320,6 @@ def train(
             depth=depth,
             random_seed=42,
             verbose=50,
-            logging_level="Info"
         )
         model.fit(
             x_train,
