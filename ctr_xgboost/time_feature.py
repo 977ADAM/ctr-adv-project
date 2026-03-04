@@ -17,12 +17,7 @@ class TimeFeaturesTransformer:
         self.target_col = target_col
         self.lags = lags
         self.event_id_col = event_id_col
-        self.feature_columns = [
-            "year", "month", "day", "dayofweek",
-            "hour", "weekofyear", "is_weekend",
-            "hour_sin", "hour_cos",
-            "dow_sin", "dow_cos",
-        ]
+        self.feature_columns = []
 
     def _ensure_utc(self, s: pd.Series) -> pd.Series:
         dt = pd.to_datetime(s, errors="coerce", utc=True)
@@ -42,31 +37,35 @@ class TimeFeaturesTransformer:
             sort_cols.append(self.event_id_col)
         df = df.sort_values(sort_cols, kind="mergesort")
 
-        dupli = df.duplicated([self.user_col, self.time_col], keep=False)
-        if dupli.any() and self.event_id_col is None:
-            raise ValueError(
-                "Обнаружен дубликат (пользователь, время). Укажите event_id_col для детерминированного упорядочивания"
-                "или удалите дубликат из вышестоящего источника."
-            )
+        # dupli = df.duplicated([self.user_col, self.time_col], keep=False)
+        # if dupli.any() and self.event_id_col is None: # зашита от дубликатов
+        #     raise ValueError(
+        #         "Обнаружен дубликат (пользователь, время). Укажите event_id_col для детерминированного упорядочивания"
+        #         "или удалите дубликат из вышестоящего источника."
+        #     )
+        
+        dt = df[self.time_col]
+        df["year"] = dt.dt.year
+        df["month"] = dt.dt.month
+        df["day"] = dt.dt.day
+        df["dayofweek"] = dt.dt.dayofweek
+        df["hour"] = dt.dt.hour
+        df["weekofyear"] = dt.dt.isocalendar().week.astype(int)
 
-        df["year"] = df[self.time_col].dt.year
-        df["month"] = df[self.time_col].dt.month
-        df["day"] = df[self.time_col].dt.day
-        df["dayofweek"] = df[self.time_col].dt.dayofweek
-        df["hour"] = df[self.time_col].dt.hour
-        df["weekofyear"] = df[self.time_col].dt.isocalendar().week.astype(int)
-        df["is_weekend"] = df["dayofweek"].isin([5, 6]).astype(int)
+        df["is_weekend"] = df["dayofweek"].isin([5, 6]).astype(np.int8)
 
         # cyclic
         df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
         df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
-
         df["dow_sin"] = np.sin(2 * np.pi * df["dayofweek"] / 7)
         df["dow_cos"] = np.cos(2 * np.pi * df["dayofweek"] / 7)
 
-        feature_cols = list(self.feature_columns)
+        feature_cols = [
+            "year", "month", "day", "dayofweek", "hour", "weekofyear", "is_weekend",
+            "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+        ]
 
-        grouped = df.groupby(self.user_col)[self.target_col]
+        grouped = df.groupby(self.user_col, sort=False)[self.target_col]
 
         # lags
         for lag in self.lags:
@@ -78,30 +77,52 @@ class TimeFeaturesTransformer:
         shifted = grouped.shift(1)
 
         df["rolling_mean_7"] = (
-            shifted.rolling(7, min_periods=1).mean().reset_index(level=0, drop=True)
+            shifted
+            .groupby(df[self.user_col], sort=False)
+            .rolling(7, min_periods=1)
+            .mean()
+            .reset_index(level=0, drop=True)
         )
 
         df["rolling_std_30"] = (
-            shifted.rolling(30, min_periods=1).std().reset_index(level=0, drop=True)
+            shifted
+            .groupby(df[self.user_col], sort=False)
+            .rolling(30, min_periods=1)
+            .std()
+            .reset_index(level=0, drop=True)
         )
 
         df["ewm_7"] = (
             shifted
-                .ewm(span=7, adjust=False)
-                .mean()
-                .reset_index(level=0, drop=True)
+            .groupby(df[self.user_col])
+            .ewm(span=7, adjust=False)
+            .mean()
+            .reset_index(level=0, drop=True)
         )
+
+        df["prev_time"] = (
+            df.groupby(self.user_col,  sort=False)[self.time_col]
+            .shift(1)
+        )
+
+        df["time_since_prev"] = (
+            (df[self.time_col] - df["prev_time"])
+            .dt.total_seconds()
+        )
+
+        df["event_number"] = df.groupby(self.user_col, sort=False).cumcount()
+
         feature_cols += [
             "rolling_mean_7",
             "rolling_std_30",
             "ewm_7",
+            "time_since_prev",
+            "event_number"
         ]
 
-        self.feature_columns = feature_cols
-
-        df = df.reset_index(drop=True)
-        
-        return df
+        df = df.drop(columns=[self.time_col, "prev_time"], errors="ignore")
+        self.feature_columns = list(feature_cols)
+        return df.reset_index(drop=True)
     
     def get_feature_columns(self):
         return self.feature_columns
