@@ -205,6 +205,7 @@ def time_aware_split(df: pd.DataFrame, val_size: float) -> tuple[pd.DataFrame, p
 
     if "DateTime" in df.columns:
         dt = pd.to_datetime(df["DateTime"], errors="coerce")
+        
         if dt.notna().sum() >= 2:
             tmp = df.copy()
             tmp["_dt"] = dt
