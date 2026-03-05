@@ -1,22 +1,64 @@
 import pandas as pd
 import numpy as np
 import joblib
+from dataclasses import dataclass
 
-from sklearn.model_selection import train_test_split, KFold
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import roc_auc_score, log_loss, average_precision_score
-
 from category_encoders import CatBoostEncoder
-
 from xgboost import XGBClassifier
 
 np.random.seed(42)
 
-df = pd.read_csv("./data/dataset_train.csv")
-df_test = pd.read_csv("./data/dataset_test.csv")
 
+
+@dataclass
+class Config:
+    # paths
+    train_path: str = "./data/dataset_train.csv"
+    test_path: str = "./data/dataset_test.csv"
+    output_dir: str = "outputs"
+    submission_name: str = "submission_xgb.csv"
+
+    # columns
+    target_col: str = "clicked"
+    id_col: str = "ID"
+    seq_col: str = "seq"
+
+    # CV
+    n_splits: int = 5
+    random_state: int = 42
+
+    # sampling (빠른 재현용)
+    # None이면 전체 사용
+    train_sample_n: int | None = None  # 예: 10000, 20000
+
+    # XGBoost params (기본값, 필요시 수정)
+    xgb_params: dict = None
+
+    def __post_init__(self):
+        if self.xgb_params is None:
+            self.xgb_params = {
+                "objective": "binary:logistic",
+                "eval_metric": "auc",
+                "learning_rate": 0.05,
+                "max_depth": 7,
+                "subsample": 0.8,
+                "colsample_bytree": 0.7,
+                "reg_lambda": 1.2,
+                "reg_alpha": 0.4,
+                "n_estimators": 800,
+                "random_state": self.random_state,
+                "n_jobs": -1,
+            }
+
+cfg = Config()
+
+df = pd.read_csv(cfg.train_path)
+df_test = pd.read_csv(cfg.test_path)
 
 def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -53,18 +95,38 @@ df_test = df_test.drop(columns=["session_id","DateTime"])
 X = df.drop(columns=["is_click", "session_id", "DateTime"])
 y = df["is_click"]
 
-X_train, X_valid, y_train, y_valid = train_test_split(
-    X,
-    y,
-    test_size=0.2,
-    stratify=y,
-    random_state=42
-)
+sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
+aucs = []
 
-train_df = X_train.copy()
-train_df["is_click"] = y_train
+for fold, (train_idx, valid_idx) in enumerate(
+    sgkf.split(X, y, groups=df["user_id"])
+):
 
+    X_train, X_valid = X.iloc[train_idx], X.iloc[valid_idx]
+    y_train, y_valid = y.iloc[train_idx], y.iloc[valid_idx]
 
+    model = XGBClassifier(
+        max_depth=8,
+        learning_rate=0.05,
+        n_estimators=500,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        eval_metric="auc",
+        random_state=42,
+        
+    )
+
+    model.fit(X_train, y_train)
+
+    proba = model.predict_proba(X_valid)[:, 1]
+
+    ll = log_loss(y_valid, proba)
+    auc = roc_auc_score(y_valid, proba)
+    pr_auc = average_precision_score(y_valid, proba)
+    aucs.append(auc)
+
+    print(f"===============Fold {fold+1} ROC AUC: {auc:.6f} PR AUC: {pr_auc:.6f} LogLoss: {ll:.6f} ================")
+    
 # =================================================================================================
 
 numeric_features = [
@@ -83,9 +145,6 @@ numeric_features = [
     'hour_cos',
     'dow_sin',
     'dow_cos',
-    "user_ctr",
-    "product_ctr",
-    "user_product_ctr"
 ]
 
 categorical_features = [
@@ -107,7 +166,7 @@ numeric_pipeline = Pipeline([
 
 categorical_pipeline = Pipeline([
     ("imputer", SimpleImputer(strategy="most_frequent")),
-    ("encoder",  CatBoostEncoder())
+    ("encoder",  CatBoostEncoder(sigma=0.01))
 ])
 
 preprocessor = ColumnTransformer(
@@ -150,8 +209,7 @@ pipeline = Pipeline([
     ("classifier", model)
 ])
 
-pipeline.fit(X_train, y_train, eval_set=[(X_valid,y_valid)],
-   early_stopping_rounds=200)
+pipeline.fit(X_train, y_train)
 
 proba = pipeline.predict_proba(X_valid)[:,1]
 
