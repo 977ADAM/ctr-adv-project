@@ -18,30 +18,6 @@ df = pd.read_csv("./data/dataset_train.csv")
 df_test = pd.read_csv("./data/dataset_test.csv")
 
 
-def oof_ctr_feature(df, col, target, n_splits=5):
-
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-
-    oof = np.zeros(len(df))
-
-    global_ctr = df[target].mean()
-
-    for train_idx, valid_idx in kf.split(df):
-
-        train_fold = df.iloc[train_idx]
-        valid_fold = df.iloc[valid_idx]
-
-        ctr = train_fold.groupby(col)[target].mean()
-
-        oof[valid_idx] = valid_fold[col].map(ctr)
-
-    oof = pd.Series(oof, index=df.index)
-
-    oof.fillna(global_ctr, inplace=True)
-
-    return oof
-
-
 def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
