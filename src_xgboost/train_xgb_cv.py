@@ -1,6 +1,7 @@
 import numpy as np
-from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import roc_auc_score
+import joblib
+from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.metrics import roc_auc_score, log_loss, average_precision_score
 from xgboost import XGBClassifier
 
 from .config import Config
@@ -16,34 +17,57 @@ def main():
     train_df = load_parquet(cfg.train_path)
     test_df = load_parquet(cfg.test_path)
 
-    # 빠른 재현 샘플링 (원하면 cfg.train_sample_n 설정)
     train_df = maybe_sample(train_df, cfg.train_sample_n, cfg.random_state)
 
-    # Feature engineering
     train_df, test_df = build_features(train_df, test_df, target_col=cfg.target_col)
 
     feature_cols = get_feature_cols(train_df, target_col=cfg.target_col, id_col=cfg.id_col)
+
     X = train_df[feature_cols]
     y = train_df[cfg.target_col].astype(int)
 
-    skf = StratifiedKFold(n_splits=cfg.n_splits, shuffle=True, random_state=cfg.random_state)
+    sgkf = StratifiedGroupKFold(n_splits=cfg.n_splits, shuffle=True, random_state=cfg.random_state)
     aucs = []
 
-    for fold, (tr_idx, va_idx) in enumerate(skf.split(X, y), start=1):
-        X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
-        y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
+    for fold, (train_idx, valid_idx) in enumerate(sgkf.split(X, y, groups=train_df["user_id"])):
 
-        model = XGBClassifier(**cfg.xgb_params)
-        model.fit(X_tr, y_tr)
+        X_train, X_valid = X.iloc[train_idx], X.iloc[valid_idx]
+        y_train, y_valid = y.iloc[train_idx], y.iloc[valid_idx]
 
-        pred = model.predict_proba(X_va)[:, 1]
-        auc = roc_auc_score(y_va, pred)
+        scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
+
+        params = cfg.xgb_params.copy()
+        params["scale_pos_weight"] = scale_pos_weight
+
+        model = XGBClassifier(**params)
+        model.fit(X_train, y_train)
+
+        proba = model.predict_proba(X_valid)[:, 1]
+
+        auc = roc_auc_score(y_valid, proba)
+        ll = log_loss(y_valid, proba)
+        pr_auc = average_precision_score(y_valid, proba)
+
         aucs.append(auc)
-        print(f"[Fold {fold}] AUC: {auc:.6f}")
+
+        print(f"===============Fold {fold+1} ROC AUC: {auc:.6f} PR AUC: {pr_auc:.6f} LogLoss: {ll:.6f} ================")
 
     print("=" * 40)
     print(f"Mean CV AUC: {np.mean(aucs):.6f}  |  Std: {np.std(aucs):.6f}")
     print("=" * 40)
+
+    print("\nTraining final model on full data...")
+
+    scale_pos_weight = (y == 0).sum() / (y == 1).sum()
+
+    params = cfg.xgb_params.copy()
+    params["scale_pos_weight"] = scale_pos_weight
+
+    model = XGBClassifier(**params)
+
+    model.fit(X, y)
+
+    joblib.dump(model, "ctr_model.pkl")
 
 
 if __name__ == "__main__":

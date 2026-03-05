@@ -98,9 +98,7 @@ y = df["is_click"]
 sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
 aucs = []
 
-for fold, (train_idx, valid_idx) in enumerate(
-    sgkf.split(X, y, groups=df["user_id"])
-):
+for fold, (train_idx, valid_idx) in enumerate(sgkf.split(X, y, groups=df["user_id"])):
 
     X_train, X_valid = X.iloc[train_idx], X.iloc[valid_idx]
     y_train, y_valid = y.iloc[train_idx], y.iloc[valid_idx]
