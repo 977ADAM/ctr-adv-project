@@ -5,7 +5,7 @@ from sklearn.metrics import roc_auc_score, log_loss, average_precision_score
 from xgboost import XGBClassifier
 
 from .config import Config
-from .data import load_csv
+from .dataload import load_csv
 from .features import build_features, get_feature_cols
 from .utils import ensure_dir
 

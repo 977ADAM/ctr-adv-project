@@ -3,7 +3,7 @@ import numpy as np
 from xgboost import XGBClassifier
 
 from .config import Config
-from .data import load_parquet
+from .dataload import load_parquet
 from .features import build_features, get_feature_cols
 from .utils import ensure_dir, save_submission
 
