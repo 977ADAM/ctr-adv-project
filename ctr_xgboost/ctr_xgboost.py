@@ -6,9 +6,9 @@ from sklearn.model_selection import train_test_split, KFold
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, log_loss, average_precision_score
 
-from category_encoders import CatBoostEncoder, TargetEncoder
+from category_encoders import CatBoostEncoder
 
 from xgboost import XGBClassifier
 
@@ -88,68 +88,8 @@ X_train, X_valid, y_train, y_valid = train_test_split(
 train_df = X_train.copy()
 train_df["is_click"] = y_train
 
-X_train["user_ctr"] = oof_ctr_feature(
-    train_df,
-    col="user_id",
-    target="is_click"
-)
-
-X_train["product_ctr"] = oof_ctr_feature(
-    train_df,
-    col="product",
-    target="is_click"
-)
-train_df["user_product"] = (
-    train_df["user_id"].astype(str)
-    + "_"
-    + train_df["product"].astype(str)
-)
-
-X_train["user_product_ctr"] = oof_ctr_feature(
-    train_df,
-    col="user_product",
-    target="is_click"
-)
-
-user_ctr = train_df.groupby("user_id")["is_click"].mean()
-
-product_ctr = train_df.groupby("product")["is_click"].mean()
-
-user_product_ctr = train_df.groupby("user_product")["is_click"].mean()
-
-
-X_valid["user_ctr"] = X_valid["user_id"].map(user_ctr)
-
-X_valid["product_ctr"] = X_valid["product"].map(product_ctr)
-
-X_valid["user_product"] = (
-    X_valid["user_id"].astype(str)
-    + "_"
-    + X_valid["product"].astype(str)
-)
-
-X_valid["user_product_ctr"] = X_valid["user_product"].map(user_product_ctr)
 
 # =================================================================================================
-
-df_test["user_ctr"] = df_test["user_id"].map(user_ctr)
-
-df_test["product_ctr"] = df_test["product"].map(product_ctr)
-
-df_test["user_product"] = (
-    df_test["user_id"].astype(str)
-    + "_"
-    + df_test["product"].astype(str)
-)
-
-df_test["user_product_ctr"] = df_test["user_product"].map(user_product_ctr)
-
-fill_value = y_train.mean()
-
-for col in ["user_ctr", "product_ctr", "user_product_ctr"]:
-    X_train[col].fillna(fill_value, inplace=True)
-    X_valid[col].fillna(fill_value, inplace=True)
-    df_test[col].fillna(fill_value, inplace=True)
 
 numeric_features = [
     "age_level",
@@ -191,7 +131,7 @@ numeric_pipeline = Pipeline([
 
 categorical_pipeline = Pipeline([
     ("imputer", SimpleImputer(strategy="most_frequent")),
-    ("encoder",  TargetEncoder(smoothing=10))
+    ("encoder",  CatBoostEncoder())
 ])
 
 preprocessor = ColumnTransformer(
@@ -204,14 +144,28 @@ preprocessor = ColumnTransformer(
 scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
 
 model = XGBClassifier(
-    n_estimators=300,
-    max_depth=6,
-    learning_rate=0.01,
+
+    n_estimators=4000,
+    learning_rate=0.02,
+
+
+    max_depth=8,
+    min_child_weight=5,
+
     subsample=0.8,
     colsample_bytree=0.8,
-    eval_metric="auc",
-    tree_method="auto",
+    colsample_bylevel=0.8,
+
+    gamma=0.1,
+
+    reg_alpha=1.0,
+    reg_lambda=5.0,
+
     scale_pos_weight=scale_pos_weight,
+
+    eval_metric="auc",
+    tree_method="hist",
+    
     random_state=42,
 )
 
@@ -220,12 +174,20 @@ pipeline = Pipeline([
     ("classifier", model)
 ])
 
-pipeline.fit(X_train, y_train)
+pipeline.fit(X_train, y_train, eval_set=[(X_valid,y_valid)],
+   early_stopping_rounds=200)
 
 proba = pipeline.predict_proba(X_valid)[:,1]
 
+ll = log_loss(y_valid, proba)
 auc = roc_auc_score(y_valid, proba)
-print("ROC AUC:", auc)
+pr_auc = average_precision_score(y_valid, proba)
+
+
+print(f"===============PR AUC: {pr_auc} =====================")
+print(f"===============ROC AUC: {auc} =====================")
+print(f"===============LogLoss: {ll} =====================")
+
 
 joblib.dump(pipeline, "ctr_model.pkl")
 
