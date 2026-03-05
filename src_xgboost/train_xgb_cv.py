@@ -5,19 +5,17 @@ from sklearn.metrics import roc_auc_score, log_loss, average_precision_score
 from xgboost import XGBClassifier
 
 from .config import Config
-from .data import load_parquet, maybe_sample
+from .data import load_csv
 from .features import build_features, get_feature_cols
 from .utils import ensure_dir
 
 
 def main():
-    cfg = Config()
-    ensure_dir(cfg.output_dir)
+    cfg = Config() # Конфигурация проекта
+    ensure_dir(cfg.output_dir) # создание папки для выходных данных
 
-    train_df = load_parquet(cfg.train_path)
-    test_df = load_parquet(cfg.test_path)
-
-    train_df = maybe_sample(train_df, cfg.train_sample_n, cfg.random_state)
+    train_df = load_csv(cfg.train_path) # загрузка тренировачного датасета
+    test_df = load_csv(cfg.test_path) # загрузка тестового датасета
 
     train_df, test_df = build_features(train_df, test_df, target_col=cfg.target_col)
 
