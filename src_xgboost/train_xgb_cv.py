@@ -1,13 +1,15 @@
 import numpy as np
 import joblib
 from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.pipeline import Pipeline
 from sklearn.metrics import roc_auc_score, log_loss, average_precision_score
 from xgboost import XGBClassifier
 
-from .config import Config
-from .dataload import load_csv
-from .features import build_features, get_feature_cols
-from .utils import ensure_dir
+from config import Config
+from dataload import load_csv
+from features import build_features, get_feature_cols
+from utils import ensure_dir
+from preprocess import prepro
 
 
 def main():
@@ -19,7 +21,7 @@ def main():
 
     train_df, test_df = build_features(train_df, test_df, target_col=cfg.target_col)
 
-    feature_cols = get_feature_cols(train_df, target_col=cfg.target_col, id_col=cfg.id_col)
+    feature_cols = get_feature_cols(train_df, target_col=cfg.target_col, session_id_col=cfg.session_id_col)
 
     X = train_df[feature_cols]
     y = train_df[cfg.target_col].astype(int)
@@ -32,15 +34,26 @@ def main():
         X_train, X_valid = X.iloc[train_idx], X.iloc[valid_idx]
         y_train, y_valid = y.iloc[train_idx], y.iloc[valid_idx]
 
+        preprocessor = prepro()
+
         scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
 
         params = cfg.xgb_params.copy()
         params["scale_pos_weight"] = scale_pos_weight
 
         model = XGBClassifier(**params)
-        model.fit(X_train, y_train)
 
-        proba = model.predict_proba(X_valid)[:, 1]
+        pipeline = Pipeline([
+            ("preprocessor", preprocessor),
+            ("classifier", model)
+        ])
+
+        pipeline.fit(
+            X_train,
+            y_train,
+        )
+
+        proba = pipeline.predict_proba(X_valid)[:, 1]
 
         auc = roc_auc_score(y_valid, proba)
         ll = log_loss(y_valid, proba)
@@ -56,6 +69,8 @@ def main():
 
     print("\nTraining final model on full data...")
 
+    preprocessor = prepro()
+
     scale_pos_weight = (y == 0).sum() / (y == 1).sum()
 
     params = cfg.xgb_params.copy()
@@ -63,9 +78,14 @@ def main():
 
     model = XGBClassifier(**params)
 
-    model.fit(X, y)
+    pipeline = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", model)
+    ])
 
-    joblib.dump(model, "ctr_model.pkl")
+    pipeline.fit(X, y)
+
+    joblib.dump(pipeline, "ctr_model.pkl")
 
 
 if __name__ == "__main__":

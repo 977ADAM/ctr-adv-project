@@ -1,10 +1,27 @@
-import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from category_encoders import CatBoostEncoder
+from sklearn.pipeline import Pipeline
 
-TARGET_COL = "clicked"
+from config import Config
 
-def load_data(path):
-    return pd.read_parquet(path)
+cfg = Config()
 
-def get_feature_columns(df, target_col=TARGET_COL):
-    exclude_cols = ["ID", target_col]
-    return [c for c in df.columns if c not in exclude_cols]
+def prepro():
+    numeric_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median"))
+    ])
+
+    categorical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder",  CatBoostEncoder(random_state=cfg.random_state, sigma=0.01))
+    ])
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_pipeline, cfg.numeric_features),
+            ("cat", categorical_pipeline, cfg.categorical_features)
+        ]
+    )
+
+    return preprocessor

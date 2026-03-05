@@ -4,6 +4,7 @@ snapshots/
 catboost_info/
 artifacts/
 *.png
+*.pkl
 .pytest_cache/
 node_modules/
 .ruff_cache
